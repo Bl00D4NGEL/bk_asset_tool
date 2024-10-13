@@ -1,6 +1,9 @@
+use std::collections::btree_map::{IterMut, Keys};
+use std::collections::HashMap;
+use std::{default, fmt};
 use std::fs::{self, File, DirBuilder};
-use std::io::{Write, Read, BufWriter};
-use std::path::Path;
+use std::io::{Write, BufWriter};
+use std::path::{Display, Path};
 use yaml_rust::{Yaml, YamlLoader};
 use png;
 
@@ -11,7 +14,7 @@ pub fn from_seg_indx_and_bytes(segment :usize, i :usize, in_bytes: &[u8]) -> Box
             [0x00, 0x00, 0x00, 0x0B, ..] => Box::new(Model::from_bytes(in_bytes)),
             _ => Box::new(Sprite::from_bytes(in_bytes)),
         }, //sprites
-        2 => Box::new(LevelSetup::from_bytes(in_bytes)),
+        2 => Box::new(LevelSetup::from_bytes(in_bytes, i)),
         4 => match in_bytes { //Dialog, GruntyQuestions, QuizQuestions, DemoButtonFiles
                 [0x01, 0x01, 0x02, 0x05, 0x00, ..] => Box::new(QuizQuestion::from_bytes(in_bytes)),
                 [0x01, 0x03, 0x00, 0x05, 0x00, ..] => Box::new(GruntyQuestion::from_bytes(in_bytes)),
@@ -521,9 +524,500 @@ pub struct LevelSetup{
     bytes: Vec<u8>,
 }
 
+struct LevelSetupReader<'a> {
+    in_bytes: &'a[u8],
+    offset: usize
+}
+
+impl LevelSetupReader<'_> {
+    pub fn new(in_bytes: &[u8]) ->LevelSetupReader {
+        LevelSetupReader {
+            in_bytes,
+            offset: 0
+        }
+    }
+
+    // This currently only advances the offset until we figure out what a n64 "word" is in Rust terms
+    pub fn read_word(&mut self) {
+        // the "word" size for n64 is 4
+        self.offset += 4;
+    }
+
+    // the BK code uses s32 instead of i32
+    pub fn read_i32(&mut self) -> i32 {
+        let out = i32::from_be_bytes([
+            self.in_bytes[self.offset], 
+            self.in_bytes[self.offset+1], 
+            self.in_bytes[self.offset+2], 
+            self.in_bytes[self.offset+3]
+        ]);
+
+        self.offset += 4;
+
+        out
+    }
+
+    // the BK code uses s16 instead of i16
+    pub fn read_i16(&mut self) -> i16 {
+        let out = i16::from_be_bytes([self.in_bytes[self.offset], self.in_bytes[self.offset+1]]);
+        self.offset += 2;
+
+        out
+    }
+
+    // the BK code uses s8 instead of i8
+    pub fn read_i8(&mut self) -> i8 {
+        let out = i8::from_be_bytes([self.in_bytes[self.offset]]);
+        self.offset += 1;
+
+        out
+    }
+    
+    pub fn read_u32(&mut self) -> u32 {
+        let out = u32::from_be_bytes([
+            self.in_bytes[self.offset], 
+            self.in_bytes[self.offset+1], 
+            self.in_bytes[self.offset+2], 
+            self.in_bytes[self.offset+3]
+        ]);
+
+        self.offset += 4;
+
+        out
+    }
+
+    pub fn read_u16(&mut self) -> u16 {
+        let out = u16::from_be_bytes([self.in_bytes[self.offset], self.in_bytes[self.offset+1]]);
+        self.offset += 2;
+
+        out
+    }
+
+    pub fn read_u8(&mut self) -> u8 {
+        let out = self.in_bytes[self.offset];
+        self.offset += 1;
+
+        out
+    }
+    
+    pub fn read_f32(&mut self) -> f32 {
+        let out = f32::from_be_bytes([
+            self.in_bytes[self.offset], 
+            self.in_bytes[self.offset+1], 
+            self.in_bytes[self.offset+2], 
+            self.in_bytes[self.offset+3]
+        ]);
+
+        self.offset += 4;
+
+        out
+    }
+
+    pub fn read_n<T>(&mut self, n: usize, reader_fn: impl Fn(&mut LevelSetupReader) -> T) -> Vec<T> {
+        let mut out = vec![];
+        println!("Read n {n}");
+        for _ in 0..n {
+            out.push(reader_fn(self));
+        }
+
+        out
+    }
+
+    pub fn peek_u8(&self) -> u8 {
+        self.in_bytes[self.offset]
+    }
+
+    pub fn read_u8_n(&mut self, n: usize) -> Vec<u8>{
+        return self.read_n(n, |r| r.read_u8());
+        let out = self.in_bytes[self.offset..(self.offset + n)].into();
+        self.offset += n;
+
+        out
+    }
+
+    pub fn read_if_expected<T>(&mut self, expected_value: u8, reader_fn: impl Fn(&mut LevelSetupReader) -> T) -> Option<T> {
+        if self.in_bytes[self.offset] == expected_value {
+            self.offset += 1;
+            Some(reader_fn(self))
+        } else {
+            None
+        }
+    }
+
+    pub fn u8s_to_string(in_bytes: &[u8]) -> String {
+        in_bytes.iter().map(|x| format!("{:02X}", x)).collect::<Vec<String>>().join(" ")
+    }
+}
+
+impl fmt::Display for LevelSetupReader<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.in_bytes[self.offset..].iter().map(|x| format!("{:02X}", x)).collect::<Vec<String>>().join(" "))
+    }
+}
+
 impl LevelSetup{
-    pub fn from_bytes(in_bytes: &[u8])->LevelSetup{
+    pub fn from_bytes(in_bytes: &[u8], i: usize)->LevelSetup{
+        let map_id_offset = 1820;
+        let map_idx = i - map_id_offset;
+        
+        let maps = LevelSetup::build_map_hash_set();
+        let map_name = maps.get(&map_idx).expect(format!("Expected {map_idx} to exist in maps").as_str());
+        if map_name.eq(&String::from("SM_SPIRAL_MOUNTAIN")) {
+            LevelSetup::parse_file(in_bytes);
+        }
+        
         LevelSetup{bytes: in_bytes.to_vec()}
+    }
+
+    fn parse_file(in_bytes: &[u8]) {
+        let mut reader = LevelSetupReader::new(in_bytes);
+        loop {
+            let cmd = reader.read_u8();
+            match cmd {
+                0 => {
+                    return;
+                }
+                1 => {
+                    // cubeList_fromFile
+                    let has_cubes_from = reader.read_u8();
+                    let mut cubes_from: [i32; 3] = [0,0,0];
+                    if has_cubes_from == 1 {
+                        cubes_from = [
+                            reader.read_i32(),
+                            reader.read_i32(),
+                            reader.read_i32(),
+                        ];
+                    }
+                    let cubes_to = [
+                        reader.read_i32(),
+                        reader.read_i32(),
+                        reader.read_i32(),
+                    ];
+
+                    for x in cubes_from[0]..=cubes_to[0] {
+                        for y in cubes_from[1]..=cubes_to[1] {
+                            for z in cubes_from[2]..=cubes_to[2] {
+                                // println!("x: {x} | y: {y} | z: {z}");
+                                let cubes = LevelSetup::get_cubes_from_reader(&mut reader);
+                                //  println!("Found {} cubes in parse_file", cubes.len());
+                            }
+                        }
+                    }
+                    
+                    // in the c code after the for loops there is:
+                    // file_isNextByteExpected(file_ptr, 0);
+                    // which, in essence, advances the file_ptr by 1 if the current value is 0
+                    reader.read_if_expected(0, |_| 0);
+                }, 
+                3 => {
+                    // ncCameraNodeList_fromFile
+                    loop {
+                        let cmd = reader.read_u8();
+                        if cmd == 0 {
+                            break
+                        }
+
+                        if cmd != 1 {
+                            panic!("Unexpected cmd {cmd}");
+                        }
+                        
+                        let _camera_node_index = reader.read_i16();
+                         // seems to be between 0 and 4
+                        let camera_node_type = reader.read_if_expected(2, |r| r.read_u8()).unwrap_or(0);
+                        
+                        match camera_node_type {
+                            0 => {
+                                break;
+                            },
+                            2 => {
+                                loop {
+                                    let cmd = reader.read_u8();
+                                    if cmd == 0 {
+                                        break;
+                                    }
+
+                                    if cmd == 1 {
+                                        // f32s file_getNFloats_ifExpected(file_ptr, 1, arg1->position, 3)
+                                        println!("cmd = 1: {}", LevelSetupReader::u8s_to_string(&reader.read_u8_n(12)));
+                                        // reader.read_u8_n(3 * 4);
+                                    }
+                                    
+                                    else if cmd == 2 {
+                                        // f32s file_getNFloats_ifExpected(file_ptr, 2, arg1->rotation, 3)
+                                        println!("cmd = 2: {}", LevelSetupReader::u8s_to_string(&reader.read_u8_n(12)));
+                                        // reader.read_u8_n(3 * 4);
+                                    } else {
+                                        todo!("cmd = {cmd}: {}", LevelSetupReader::u8s_to_string(&reader.read_u8_n(50)));
+                                    }
+                                }
+                            },
+                            3 => {
+                                loop {
+                                    let cmd = reader.read_u8();
+                                    if cmd == 0 {
+                                        break;
+                                    }
+
+                                    if cmd == 1 {
+                                        // file_getNFloats_ifExpected(file_ptr, 1, arg1->position, 3)
+                                        reader.read_n(3, |r| r.read_f32());
+                                    } else if cmd == 2 {
+                                        // file_getFloat(file_ptr, &arg1->unkC);
+                                        reader.read_f32();
+                                        // file_getFloat(file_ptr, &arg1->unk10);
+                                        reader.read_f32();
+                                    } else if cmd == 3 {
+                                        // file_getFloat(file_ptr, &arg1->unk14);
+                                        reader.read_f32();
+                                        // file_getFloat(file_ptr, &arg1->unk18);
+                                        reader.read_f32();
+                                    } else if cmd == 4 {
+                                        // file_getFloat(file_ptr, &arg1->unk1C);
+                                        reader.read_f32();
+                                        // file_getFloat(file_ptr, &arg1->unk20);
+                                        reader.read_f32();
+                                    } else if cmd == 5 {
+                                        // file_getWord_ifExpected(file_ptr, 5, &arg1->unk30);
+                                        reader.read_word();
+                                    }
+                                }
+                            },
+                            _ => {
+                                todo!("Implement camera_node_type {camera_node_type}");
+                            },
+                        }
+                    }
+                }, 
+                4 => {
+                    // func_80333B78
+                    loop {
+                        let cmd = reader.read_u8();
+                        if cmd == 0 {
+                            break
+                        }
+
+                        todo!("Implement cmd {cmd}");
+                    }
+                }, 
+                _ => {
+                    // no-op
+                    todo!("Implement cmd {cmd}?");
+                },
+            }
+        }
+    }
+    
+    fn get_cubes_from_reader(reader: &mut LevelSetupReader) -> Vec<String> {
+        let mut out_cubes = vec![];
+
+        loop {
+            let cmd = reader.read_u8();
+            // println!("Cmd = {cmd}, offset = {offset}");
+
+            match cmd {
+                0 => {
+                    /*
+                    if (file_getNWords_ifExpected(file_ptr, 0, sp2C, 3)) {
+                        file_getNWords(file_ptr, sp2C, 3);
+                    */
+                    reader.read_n(6, |r| r.read_word());
+                },
+                1 => {
+                    return out_cubes;
+                },
+                2 => {
+                    /*
+                     !file_getNWords_ifExpected(file_ptr, 2, &sp2C, 3)
+                     */
+                    todo!("Cmd = 2");
+                    reader.read_n(3, |r| r.read_word());
+                },
+                3 => { // ->cube_fromFile
+                    let cube_type = reader.read_u8();
+                    let count: usize = reader.read_u8().into();
+
+                    let next_expected = match cube_type {
+                        0xA => 0xB,
+                        0x6 => 0x7,
+                        _ => panic!("Unsupported cude type ? cube_type = {cube_type}")
+                    };
+        
+                    println!("Reading {count} cubes (3)");
+                    
+                    let cube_byte_size = 20; // sizeof(NodeProp)
+                    let cubes = reader.read_if_expected(next_expected, |r| r.read_u8_n(count * cube_byte_size));
+
+                    if let Some(cubes) = cubes {
+                        cubes.chunks(cube_byte_size).for_each(|cube| {
+                            out_cubes.push(LevelSetupReader::u8s_to_string(cube));
+                        });
+                    }
+                },
+                8 => {
+                    // this "frees" the cube in the c code
+                    let count: usize = reader.read_u8().into();
+
+                    println!("Reading {count} cubes (8)");
+
+                    let cube_byte_size = 12; // sizeof(OtherNode)
+                    let cubes = reader.read_if_expected(9, |r| r.read_u8_n(count* cube_byte_size));
+
+                    if let Some(cubes) = cubes {
+                        cubes.chunks(cube_byte_size).for_each(|cube| {
+                            out_cubes.push(LevelSetupReader::u8s_to_string(cube));
+                        });
+                    }
+                },
+                _ => {
+                    todo!("Unknown cmd {cmd}");
+                },
+            }
+        }
+    }
+
+
+    fn build_map_hash_set() -> HashMap<usize, String> {
+        let mut hs: HashMap<usize, String> = HashMap::new();
+        
+        hs.insert(0x1, String::from("SM_SPIRAL_MOUNTAIN"));
+        hs.insert(0x2, String::from("MM_MUMBOS_MOUNTAIN"));
+        hs.insert(0x5, String::from("TTC_BLUBBERS_SHIP"));
+        hs.insert(0x6, String::from("TTC_NIPPERS_SHELL"));
+        hs.insert(0x7, String::from("TTC_TREASURE_TROVE_COVE"));
+        hs.insert(0xA, String::from("TTC_SANDCASTLE"));
+        hs.insert(0xB, String::from("CC_CLANKERS_CAVERN"));
+        hs.insert(0xC, String::from("MM_TICKERS_TOWER"));
+        hs.insert(0xD, String::from("BGS_BUBBLEGLOOP_SWAMP"));
+        hs.insert(0xE, String::from("MM_MUMBOS_SKULL"));
+        hs.insert(0x10,String::from("BGS_MR_VILE"));
+        hs.insert(0x11,String::from("BGS_TIPTUP"));
+        hs.insert(0x12,String::from("GV_GOBIS_VALLEY"));
+        hs.insert(0x13,String::from("GV_MEMORY_GAME"));
+        hs.insert(0x14,String::from("GV_SANDYBUTTS_MAZE"));
+        hs.insert(0x15,String::from("GV_WATER_PYRAMID"));
+        hs.insert(0x16,String::from("GV_RUBEES_CHAMBER"));
+        hs.insert(0x1A,String::from("GV_INSIDE_JINXY"));
+        hs.insert(0x1B,String::from("MMM_MAD_MONSTER_MANSION"));
+        hs.insert(0x1C,String::from("MMM_CHURCH"));
+        hs.insert(0x1D,String::from("MMM_CELLAR"));
+        hs.insert(0x1E,String::from("CS_START_NINTENDO"));
+        hs.insert(0x1F,String::from("CS_START_RAREWARE"));
+        hs.insert(0x20,String::from("CS_END_NOT_100"));
+        hs.insert(0x21,String::from("CC_WITCH_SWITCH_ROOM"));
+        hs.insert(0x22,String::from("CC_INSIDE_CLANKER"));
+        hs.insert(0x23,String::from("CC_GOLDFEATHER_ROOM"));
+        hs.insert(0x24,String::from("MMM_TUMBLARS_SHED"));
+        hs.insert(0x25,String::from("MMM_WELL"));
+        hs.insert(0x26,String::from("MMM_NAPPERS_ROOM"));
+        hs.insert(0x27,String::from("FP_FREEZEEZY_PEAK"));
+        hs.insert(0x28,String::from("MMM_EGG_ROOM"));
+        hs.insert(0x29,String::from("MMM_NOTE_ROOM"));
+        hs.insert(0x2A,String::from("MMM_FEATHER_ROOM"));
+        hs.insert(0x2B,String::from("MMM_SECRET_CHURCH_ROOM"));
+        hs.insert(0x2C,String::from("MMM_BATHROOM"));
+        hs.insert(0x2D,String::from("MMM_BEDROOM"));
+        hs.insert(0x2E,String::from("MMM_HONEYCOMB_ROOM"));
+        hs.insert(0x2F,String::from("MMM_WATERDRAIN_BARREL"));
+        hs.insert(0x30,String::from("MMM_MUMBOS_SKULL"));
+        hs.insert(0x31,String::from("RBB_RUSTY_BUCKET_BAY"));
+        hs.insert(0x34,String::from("RBB_ENGINE_ROOM"));
+        hs.insert(0x35,String::from("RBB_WAREHOUSE"));
+        hs.insert(0x36,String::from("RBB_BOATHOUSE"));
+        hs.insert(0x37,String::from("RBB_CONTAINER_1"));
+        hs.insert(0x38,String::from("RBB_CONTAINER_3"));
+        hs.insert(0x39,String::from("RBB_CREW_CABIN"));
+        hs.insert(0x3A,String::from("RBB_BOSS_BOOM_BOX"));
+        hs.insert(0x3B,String::from("RBB_STORAGE_ROOM"));
+        hs.insert(0x3C,String::from("RBB_KITCHEN"));
+        hs.insert(0x3D,String::from("RBB_NAVIGATION_ROOM"));
+        hs.insert(0x3E,String::from("RBB_CONTAINER_2"));
+        hs.insert(0x3F,String::from("RBB_CAPTAINS_CABIN"));
+        hs.insert(0x40,String::from("CCW_HUB"));
+        hs.insert(0x41,String::from("FP_BOGGYS_IGLOO"));
+        hs.insert(0x43,String::from("CCW_SPRING"));
+        hs.insert(0x44,String::from("CCW_SUMMER"));
+        hs.insert(0x45,String::from("CCW_AUTUMN"));
+        hs.insert(0x46,String::from("CCW_WINTER"));
+        hs.insert(0x47,String::from("BGS_MUMBOS_SKULL"));
+        hs.insert(0x48,String::from("FP_MUMBOS_SKULL"));
+        hs.insert(0x4A,String::from("CCW_SPRING_MUMBOS_SKULL"));
+        hs.insert(0x4B,String::from("CCW_SUMMER_MUMBOS_SKULL"));
+        hs.insert(0x4C,String::from("CCW_AUTUMN_MUMBOS_SKULL"));
+        hs.insert(0x4D,String::from("CCW_WINTER_MUMBOS_SKULL"));
+        hs.insert(0x53,String::from("FP_CHRISTMAS_TREE"));
+        hs.insert(0x5A,String::from("CCW_SUMMER_ZUBBA_HIVE"));
+        hs.insert(0x5B,String::from("CCW_SPRING_ZUBBA_HIVE"));
+        hs.insert(0x5C,String::from("CCW_AUTUMN_ZUBBA_HIVE"));
+        hs.insert(0x5E,String::from("CCW_SPRING_NABNUTS_HOUSE"));
+        hs.insert(0x5F,String::from("CCW_SUMMER_NABNUTS_HOUSE"));
+        hs.insert(0x60,String::from("CCW_AUTUMN_NABNUTS_HOUSE"));
+        hs.insert(0x61,String::from("CCW_WINTER_NABNUTS_HOUSE"));
+        hs.insert(0x62,String::from("CCW_WINTER_HONEYCOMB_ROOM"));
+        hs.insert(0x63,String::from("CCW_AUTUMN_NABNUTS_WATER_SUPPLY"));
+        hs.insert(0x64,String::from("CCW_WINTER_NABNUTS_WATER_SUPPLY"));
+        hs.insert(0x65,String::from("CCW_SPRING_WHIPCRACK_ROOM"));
+        hs.insert(0x66,String::from("CCW_SUMMER_WHIPCRACK_ROOM"));
+        hs.insert(0x67,String::from("CCW_AUTUMN_WHIPCRACK_ROOM"));
+        hs.insert(0x68,String::from("CCW_WINTER_WHIPCRACK_ROOM"));
+        hs.insert(0x69,String::from("GL_MM_LOBBY"));
+        hs.insert(0x6A,String::from("GL_TTC_AND_CC_PUZZLE"));
+        hs.insert(0x6B,String::from("GL_180_NOTE_DOOR"));
+        hs.insert(0x6C,String::from("GL_RED_CAULDRON_ROOM"));
+        hs.insert(0x6D,String::from("GL_TTC_LOBBY"));
+        hs.insert(0x6E,String::from("GL_GV_LOBBY"));
+        hs.insert(0x6F,String::from("GL_FP_LOBBY"));
+        hs.insert(0x70,String::from("GL_CC_LOBBY"));
+        hs.insert(0x71,String::from("GL_STATUE_ROOM"));
+        hs.insert(0x72,String::from("GL_BGS_LOBBY"));
+        hs.insert(0x73,String::from("UNKNOWN"));
+        hs.insert(0x74,String::from("GL_GV_PUZZLE"));
+        hs.insert(0x75,String::from("GL_MMM_LOBBY"));
+        hs.insert(0x76,String::from("GL_640_NOTE_DOOR"));
+        hs.insert(0x77,String::from("GL_RBB_LOBBY"));
+        hs.insert(0x78,String::from("GL_RBB_AND_MMM_PUZZLE"));
+        hs.insert(0x79,String::from("GL_CCW_LOBBY"));
+        hs.insert(0x7A,String::from("GL_CRYPT"));
+        hs.insert(0x7B,String::from("CS_INTRO_GL_DINGPOT_1"));
+        hs.insert(0x7C,String::from("CS_INTRO_BANJOS_HOUSE_1"));
+        hs.insert(0x7D,String::from("CS_SPIRAL_MOUNTAIN_1"));
+        hs.insert(0x7E,String::from("CS_SPIRAL_MOUNTAIN_2"));
+        hs.insert(0x7F,String::from("FP_WOZZAS_CAVE"));
+        hs.insert(0x80,String::from("GL_FF_ENTRANCE"));
+        hs.insert(0x81,String::from("CS_INTRO_GL_DINGPOT_2"));
+        hs.insert(0x82,String::from("CS_ENTERING_GL_MACHINE_ROOM"));
+        hs.insert(0x83,String::from("CS_GAME_OVER_MACHINE_ROOM"));
+        hs.insert(0x84,String::from("CS_UNUSED_MACHINE_ROOM"));
+        hs.insert(0x85,String::from("CS_SPIRAL_MOUNTAIN_3"));
+        hs.insert(0x86,String::from("CS_SPIRAL_MOUNTAIN_4"));
+        hs.insert(0x87,String::from("CS_SPIRAL_MOUNTAIN_5"));
+        hs.insert(0x88,String::from("CS_SPIRAL_MOUNTAIN_6"));
+        hs.insert(0x89,String::from("CS_INTRO_BANJOS_HOUSE_2"));
+        hs.insert(0x8A,String::from("CS_INTRO_BANJOS_HOUSE_3"));
+        hs.insert(0x8B,String::from("RBB_ANCHOR_ROOM"));
+        hs.insert(0x8C,String::from("SM_BANJOS_HOUSE"));
+        hs.insert(0x8D,String::from("MMM_INSIDE_LOGGO"));
+        hs.insert(0x8E,String::from("GL_FURNACE_FUN"));
+        hs.insert(0x8F,String::from("TTC_SHARKFOOD_ISLAND"));
+        hs.insert(0x90,String::from("GL_BATTLEMENTS"));
+        hs.insert(0x91,String::from("FILE_SELECT"));
+        hs.insert(0x92,String::from("GV_SNS_CHAMBER"));
+        hs.insert(0x93,String::from("GL_DINGPOT"));
+        hs.insert(0x94,String::from("CS_INTRO_SPIRAL_7"));
+        hs.insert(0x95,String::from("CS_END_ALL_100"));
+        hs.insert(0x96,String::from("CS_END_BEACH_1"));
+        hs.insert(0x97,String::from("CS_END_BEACH_2"));
+        hs.insert(0x98,String::from("CS_END_SPIRAL_MOUNTAIN_1"));
+        hs.insert(0x99,String::from("CS_END_SPIRAL_MOUNTAIN_"));
+
+        hs
+    }
+
+    fn bytes_to_string_vec(in_bytes: Vec<u8>) -> String {
+        in_bytes.into_iter().map(|x| format!("{:02X}", x)).collect::<Vec<String>>().join(" ")
+    }
+
+    fn bytes_to_string_slice(in_bytes: &[u8]) -> String {
+        in_bytes.iter().map(|x| format!("{:02X}", x)).collect::<Vec<String>>().join(" ")
     }
 
     pub fn read(path: &Path) -> LevelSetup{
