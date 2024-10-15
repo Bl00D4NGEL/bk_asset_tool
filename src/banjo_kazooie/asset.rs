@@ -519,9 +519,11 @@ impl Asset for MidiSeqFile{
 ///     - read
 ///     - to_bytes
 ///     - write
-
-pub struct LevelSetup{
+/// 
+#[derive(Clone, Debug)]
+pub struct LevelSetup {
     bytes: Vec<u8>,
+    cubes: Vec<LevelCubes>
 }
 
 struct LevelSetupReader<'a> {
@@ -615,7 +617,6 @@ impl LevelSetupReader<'_> {
 
     pub fn read_n<T>(&mut self, n: usize, reader_fn: impl Fn(&mut LevelSetupReader) -> T) -> Vec<T> {
         let mut out = vec![];
-        println!("Read n {n}");
         for _ in 0..n {
             out.push(reader_fn(self));
         }
@@ -655,6 +656,95 @@ impl fmt::Display for LevelSetupReader<'_> {
     }
 }
 
+#[derive(Clone, Debug)]
+struct LevelCubes {
+    start_position: [i32; 3],
+    end_position: [i32; 3],
+    cubes: Vec<LevelCube>
+}
+
+#[derive(Clone, Debug)]
+ // sizeof(NodeProp) = 20 / 0x14
+struct NodeProp {
+    x: i16,
+    y: i16,
+    z: i16,
+    radius: u16,
+    bit6: u16,
+    bit0: u16,
+    actor_id: u16, // not sure if this actually an actor id or not
+    unk_a: u8, // marker id? relevant for bitfield magic which is used later on
+    yaw: u32,
+    scale: u32,
+    /*
+    combination of:
+    u32 unk10_31: 12; // unk10_31 and unk10_19 seem to be related
+    u32 unk10_19: 12; // unk10_31 and unk10_19 seem to be related
+    u32 pad10_7: 1;
+    u32 unk10_6: 1; // isInitialized flag?
+    u32 pad10_5: 4;
+    u32 unk10_0: 2; // is only for used in func_803303B8
+    */
+    unk_10: u32 
+}
+
+#[derive(Clone, Debug)]
+// sizeof(OtherNode) (12 / 0xC)
+/**
+ * While this struct exists in the C code it doesn't really seem to do anything, therefore there's no benefit in documenting properties / giving them proper names
+ */
+struct OtherNode {
+    unk_4: u32, // 14 bits pad, 2 bits something, last bit something else, combines unk4_ 31, 17, 15, 7, 0
+    unk_c: u32, // only last bit is important, rest padding, combines unkC_ 31, 0
+    unk_10: u32, // only last 3-1 bits are useful, rest padding, combines unk10_ 31, 4, 0
+}
+
+#[derive(Clone, Debug)]
+enum LevelCubeBytes {
+    NodePropBytes(NodeProp),
+    OtherNodeBytes(OtherNode),
+}
+
+impl LevelCubeBytes {
+    pub fn new(bytes: &[u8]) -> LevelCubeBytes {
+        if bytes.len() == 20 {
+            let yaw_and_scale = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
+
+            let unk6 = u16::from_be_bytes([bytes[6], bytes[7]]);
+            let radius = unk6 & 0x1FF;
+            let bit6 = (unk6 >> 9) & 0x3F;
+            let bit0 = unk6 >> 15;
+            
+            LevelCubeBytes::NodePropBytes(NodeProp {
+                x: i16::from_be_bytes([bytes[0], bytes[1]]),
+                y: i16::from_be_bytes([bytes[2], bytes[3]]),
+                z: i16::from_be_bytes([bytes[4], bytes[5]]),
+                radius,
+                bit6,
+                bit0,
+                actor_id: u16::from_be_bytes([bytes[8], bytes[9]]),
+                unk_a: bytes[10],
+                yaw: yaw_and_scale & 0x1FF,
+                scale: yaw_and_scale >> 9,
+                unk_10: u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]),
+            })
+        } else if bytes.len() == 12 {
+            LevelCubeBytes::OtherNodeBytes(OtherNode {
+                unk_4: u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+                unk_c: u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+                unk_10: u32::from_be_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
+            })
+        } else {
+            panic!("Can not create level cube bytes from given bytes: {bytes:?}");
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct LevelCube {
+    bytes: LevelCubeBytes,
+}
+
 impl LevelSetup{
     pub fn from_bytes(in_bytes: &[u8], i: usize)->LevelSetup{
         let map_id_offset = 1820;
@@ -662,43 +752,76 @@ impl LevelSetup{
         
         let maps = LevelSetup::build_map_hash_set();
         let map_name = maps.get(&map_idx).expect(format!("Expected {map_idx} to exist in maps").as_str());
-        if map_name.eq(&String::from("SM_SPIRAL_MOUNTAIN")) {
-            LevelSetup::parse_file(in_bytes);
-        }
-        
-        LevelSetup{bytes: in_bytes.to_vec()}
-    }
+        // println!("Parsing {map_name} {map_idx}");
 
-    fn parse_file(in_bytes: &[u8]) {
+        // Skip this file as it currently fails to parse
+        if map_idx == 113 {
+            return LevelSetup{ bytes: in_bytes.to_vec(), cubes: vec![] };
+        }
+
+        let mut level_cubes = vec![];
         let mut reader = LevelSetupReader::new(in_bytes);
         loop {
             let cmd = reader.read_u8();
+            // println!("parse_file cmd = {cmd}");
             match cmd {
                 0 => {
-                    return;
+                    break;
                 }
                 1 => {
                     // cubeList_fromFile
-                    let has_cubes_from = reader.read_u8();
+                    // file_getNWords_ifExpected(file_ptr, 1, sp50, 3)
                     let mut cubes_from: [i32; 3] = [0,0,0];
-                    if has_cubes_from == 1 {
+                    let should_read = reader.read_u8();
+                    if should_read == 1 {
                         cubes_from = [
                             reader.read_i32(),
                             reader.read_i32(),
                             reader.read_i32(),
                         ];
+                    } else {
+                        println!("Not reading cubes-from");
                     }
+
+                    // file_getNWords(file_ptr, sp44, 3)
                     let cubes_to = [
                         reader.read_i32(),
                         reader.read_i32(),
                         reader.read_i32(),
                     ];
 
+                    // dbg!(cubes_from, cubes_to);
+
                     for x in cubes_from[0]..=cubes_to[0] {
                         for y in cubes_from[1]..=cubes_to[1] {
                             for z in cubes_from[2]..=cubes_to[2] {
                                 // println!("x: {x} | y: {y} | z: {z}");
                                 let cubes = LevelSetup::get_cubes_from_reader(&mut reader);
+
+                                if !cubes.is_empty() {
+                                    cubes.iter().for_each(|cube| {
+                                        let unk_c = match &cube.bytes {
+                                            LevelCubeBytes::NodePropBytes(bytes) => bytes.unk_c,
+                                            LevelCubeBytes::OtherNodeBytes(_) => 0,
+                                        };
+
+                                        if unk_c != 0 {
+                                            // Given unk_c = 0x77073030
+                                            // 01110111000001110011000000110000
+                                            // Yaw: 48, Scale: 3900312
+                                            // 0b11111111111111111111111000000000;
+                                            let maybe_yaw = unk_c & 0x1FF;
+                                            let maybe_scale = unk_c >> 9;
+                                            println!("UnkC {unk_c:X} {unk_c:032b} | {maybe_yaw:032b} / {maybe_yaw}  | {maybe_scale:032b} / {maybe_scale}", );
+                                        }
+                                    });
+
+                                    level_cubes.push(LevelCubes {
+                                        start_position: cubes_from,
+                                        end_position: cubes_to,
+                                        cubes
+                                    });
+                                }
                                 //  println!("Found {} cubes in parse_file", cubes.len());
                             }
                         }
@@ -725,65 +848,115 @@ impl LevelSetup{
                          // seems to be between 0 and 4
                         let camera_node_type = reader.read_if_expected(2, |r| r.read_u8()).unwrap_or(0);
                         
+                        // println!("Camera node type = {camera_node_type}");
                         match camera_node_type {
-                            0 => {
-                                break;
+                            0 => break,
+                            1 => {
+                                // func_802BA93C
+                                loop {
+                                    match reader.read_u8() {
+                                        0 => break,
+                                        1 => {
+                                            // file_getNFloats_ifExpected(file_ptr, 1, arg1->unk0, 3)
+                                            reader.read_n(3, |r| r.read_f32());
+                                        },
+                                        2 => {
+                                            // file_getFloat(file_ptr, &arg1->unkC);
+                                            reader.read_f32();
+                                            // file_getFloat(file_ptr, &arg1->unk10);
+                                            reader.read_f32();
+                                        },
+                                        3 => {
+                                            // file_getFloat(file_ptr, &arg1->unk14);
+                                            reader.read_f32();
+                                            // file_getFloat(file_ptr, &arg1->unk18);
+                                            reader.read_f32();
+                                        },
+                                        4  => {
+                                            // file_getNFloats_ifExpected(file_ptr, 4, arg1->unk1C, 3)
+                                            reader.read_n(3, |r| r.read_f32());
+                                        },
+                                        5 =>  {
+                                            // file_getWord_ifExpected(file_ptr, 5, &arg1->unk28);
+                                            reader.read_word();
+                                        },
+                                        _ => panic!("Unknown Cmd = {cmd}")
+                                    }
+                                }
                             },
                             2 => {
+                                // ncCameraNodeType2_fromFile
                                 loop {
-                                    let cmd = reader.read_u8();
-                                    if cmd == 0 {
-                                        break;
-                                    }
-
-                                    if cmd == 1 {
-                                        // f32s file_getNFloats_ifExpected(file_ptr, 1, arg1->position, 3)
-                                        println!("cmd = 1: {}", LevelSetupReader::u8s_to_string(&reader.read_u8_n(12)));
-                                        // reader.read_u8_n(3 * 4);
-                                    }
-                                    
-                                    else if cmd == 2 {
-                                        // f32s file_getNFloats_ifExpected(file_ptr, 2, arg1->rotation, 3)
-                                        println!("cmd = 2: {}", LevelSetupReader::u8s_to_string(&reader.read_u8_n(12)));
-                                        // reader.read_u8_n(3 * 4);
-                                    } else {
-                                        todo!("cmd = {cmd}: {}", LevelSetupReader::u8s_to_string(&reader.read_u8_n(50)));
+                                    match reader.read_u8() {
+                                        0 => break,
+                                        1 => {
+                                            // f32s file_getNFloats_ifExpected(file_ptr, 1, arg1->position, 3)
+                                            // println!("cmd = 1: {}", LevelSetupReader::u8s_to_string(&reader.read_u8_n(12)));
+                                            reader.read_n(3, |r| r.read_f32());
+                                        },
+                                        2 => {
+                                            // f32s file_getNFloats_ifExpected(file_ptr, 2, arg1->rotation, 3)
+                                            // println!("cmd = 2: {}", LevelSetupReader::u8s_to_string(&reader.read_u8_n(12)));
+                                            reader.read_n(3, |r| r.read_f32());
+                                        },
+                                        _ => panic!("Unknown cmd = {cmd}")
                                     }
                                 }
                             },
                             3 => {
+                                // func_802BA550
                                 loop {
-                                    let cmd = reader.read_u8();
-                                    if cmd == 0 {
-                                        break;
+                                    match reader.read_u8() {
+                                        0 => break,
+                                        1 => {
+                                            // file_getNFloats_ifExpected(file_ptr, 1, arg1->unk0, 3)
+                                            reader.read_n(3, |r| r.read_f32());
+                                        },
+                                        2 => {
+                                            // file_getFloat(file_ptr, &arg1->unkC);
+                                            reader.read_f32();
+                                            // file_getFloat(file_ptr, &arg1->unk10);
+                                            reader.read_f32();
+                                        },
+                                        3 => {
+                                            // file_getFloat(file_ptr, &arg1->unk14);
+                                            reader.read_f32();
+                                            // file_getFloat(file_ptr, &arg1->unk18);
+                                            reader.read_f32();
+                                        },
+                                        4 => {
+                                            // file_getNFloats_ifExpected(file_ptr, 4, arg1->unk24, 3)
+                                            reader.read_n(3, |r| r.read_f32());
+                                        },
+                                        5 => {
+                                            // file_getWord_ifExpected(file_ptr, 5, &arg1->unk30);
+                                            reader.read_word();
+                                        },
+                                        6 => {
+                                            // file_getFloat(file_ptr, &arg1->unk1C);
+                                            reader.read_f32();
+                                            // file_getFloat(file_ptr, &arg1->unk20);
+                                            reader.read_f32();
+                                        },
+                                        _ => panic!("Unknown cmd = {cmd}")
                                     }
-
-                                    if cmd == 1 {
-                                        // file_getNFloats_ifExpected(file_ptr, 1, arg1->position, 3)
-                                        reader.read_n(3, |r| r.read_f32());
-                                    } else if cmd == 2 {
-                                        // file_getFloat(file_ptr, &arg1->unkC);
-                                        reader.read_f32();
-                                        // file_getFloat(file_ptr, &arg1->unk10);
-                                        reader.read_f32();
-                                    } else if cmd == 3 {
-                                        // file_getFloat(file_ptr, &arg1->unk14);
-                                        reader.read_f32();
-                                        // file_getFloat(file_ptr, &arg1->unk18);
-                                        reader.read_f32();
-                                    } else if cmd == 4 {
-                                        // file_getFloat(file_ptr, &arg1->unk1C);
-                                        reader.read_f32();
-                                        // file_getFloat(file_ptr, &arg1->unk20);
-                                        reader.read_f32();
-                                    } else if cmd == 5 {
-                                        // file_getWord_ifExpected(file_ptr, 5, &arg1->unk30);
-                                        reader.read_word();
+                                }
+                            },
+                            4 => {
+                                // func_802BA244
+                                loop {
+                                    match reader.read_u8() {
+                                        0 => break,
+                                        1 => {
+                                            // file_getWord_ifExpected(file_ptr, 1, arg1)
+                                            reader.read_word();
+                                        },
+                                        _ => panic!("Unknown Cmd = {cmd}")
                                     }
                                 }
                             },
                             _ => {
-                                todo!("Implement camera_node_type {camera_node_type}");
+                                panic!("Unknown camera_node_type {camera_node_type}");
                             },
                         }
                     }
@@ -792,11 +965,30 @@ impl LevelSetup{
                     // func_80333B78
                     loop {
                         let cmd = reader.read_u8();
+
                         if cmd == 0 {
-                            break
+                            break;
                         }
 
-                        todo!("Implement cmd {cmd}");
+                        if cmd != 1 {
+                            panic!("Unexpected cmd = {cmd}");
+                        }
+
+                        // file_getNFloats_ifExpected(file_ptr, 2, sp4C, 3)
+                        reader.read_if_expected(2, |r| {
+                            r.read_n(3, |r| r.read_f32());
+
+                            // file_getNFloats_ifExpected(file_ptr, 3, sp44, 2)
+                            r.read_if_expected(3, |r| {
+                                r.read_n(2, |r| r.read_f32());
+                                
+                                // file_getNWords_ifExpected(file_ptr, 4, sp38, 3)
+                                r.read_if_expected(4, |r| {
+                                    r.read_n(3, |r| r.read_word());
+                                });
+                            });
+                        });
+
                     }
                 }, 
                 _ => {
@@ -805,14 +997,19 @@ impl LevelSetup{
                 },
             }
         }
+    
+    if map_idx == 1 {
+        // dbg!(&level_cubes);
+    }
+        LevelSetup {bytes: in_bytes.to_vec(), cubes: level_cubes}
     }
     
-    fn get_cubes_from_reader(reader: &mut LevelSetupReader) -> Vec<String> {
+    fn get_cubes_from_reader(reader: &mut LevelSetupReader) -> Vec<LevelCube> {
         let mut out_cubes = vec![];
 
         loop {
             let cmd = reader.read_u8();
-            // println!("Cmd = {cmd}, offset = {offset}");
+            // println!("get_cubes_from_reader Cmd = {cmd}");
 
             match cmd {
                 0 => {
@@ -832,7 +1029,7 @@ impl LevelSetup{
                     todo!("Cmd = 2");
                     reader.read_n(3, |r| r.read_word());
                 },
-                3 => { // ->cube_fromFile
+                3 => { // ->code7AF80_initCubeFromFile
                     let cube_type = reader.read_u8();
                     let count: usize = reader.read_u8().into();
 
@@ -842,14 +1039,14 @@ impl LevelSetup{
                         _ => panic!("Unsupported cude type ? cube_type = {cube_type}")
                     };
         
-                    println!("Reading {count} cubes (3)");
+                    // println!("Reading {count} cubes (3)");
                     
                     let cube_byte_size = 20; // sizeof(NodeProp)
                     let cubes = reader.read_if_expected(next_expected, |r| r.read_u8_n(count * cube_byte_size));
 
                     if let Some(cubes) = cubes {
                         cubes.chunks(cube_byte_size).for_each(|cube| {
-                            out_cubes.push(LevelSetupReader::u8s_to_string(cube));
+                            out_cubes.push(LevelCube {bytes: LevelCubeBytes::new(cube)});
                         });
                     }
                 },
@@ -857,19 +1054,19 @@ impl LevelSetup{
                     // this "frees" the cube in the c code
                     let count: usize = reader.read_u8().into();
 
-                    println!("Reading {count} cubes (8)");
+                    // println!("Reading {count} cubes (8)");
 
                     let cube_byte_size = 12; // sizeof(OtherNode)
-                    let cubes = reader.read_if_expected(9, |r| r.read_u8_n(count* cube_byte_size));
+                    let cubes = reader.read_if_expected(9, |r| r.read_u8_n(count * cube_byte_size));
 
                     if let Some(cubes) = cubes {
                         cubes.chunks(cube_byte_size).for_each(|cube| {
-                            out_cubes.push(LevelSetupReader::u8s_to_string(cube));
+                            out_cubes.push(LevelCube {bytes: LevelCubeBytes::new(cube)});
                         });
                     }
                 },
                 _ => {
-                    todo!("Unknown cmd {cmd}");
+                    todo!("Unknown cmd {cmd} {}", LevelSetupReader::u8s_to_string(&reader.read_u8_n(50)));
                 },
             }
         }
@@ -1021,7 +1218,7 @@ impl LevelSetup{
     }
 
     pub fn read(path: &Path) -> LevelSetup{
-        LevelSetup{bytes: fs::read(path).unwrap()}
+        LevelSetup{bytes: fs::read(path).unwrap(),cubes: vec![]}
     }
 }
 
