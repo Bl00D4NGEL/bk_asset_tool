@@ -7,7 +7,7 @@ use yaml_rust::{Yaml, YamlLoader};
 use png;
 
 pub fn from_seg_indx_and_bytes(segment :usize, i :usize, in_bytes: &[u8]) -> Box<dyn Asset>{
-    return match segment{
+    match segment{
         0 => Box::new(Animation::from_bytes(in_bytes)),
         1 | 3 => match in_bytes { //models and sprites
             [0x00, 0x00, 0x00, 0x0B, ..] => Box::new(Model::from_bytes(in_bytes)),
@@ -68,11 +68,11 @@ impl Binary{
 
 impl Asset for Binary{
     fn to_bytes(&self)->Vec<u8>{
-        return self.bytes.clone();
+        self.bytes.clone()
     }
 
     fn get_type(&self)->AssetType{
-        return AssetType::Binary;
+        AssetType::Binary
     }
 
     fn write(&self, path: &Path){
@@ -90,9 +90,9 @@ struct BKString{
 impl BKString{
     pub fn from_yaml(yaml: &Yaml) -> BKString{
         let cmd = yaml["cmd"].as_i64().unwrap() as u8;
-        let string = string_to_vecu8(&yaml["string"].as_str().unwrap());            
+        let string = string_to_vecu8(yaml["string"].as_str().unwrap());            
         
-        BKString{cmd : cmd, string: string}
+        BKString{cmd, string}
     }
 }
 
@@ -108,11 +108,10 @@ impl Dialog{
         let mut bottom = Vec::new();
         let bottom_size : u8 = in_bytes[offset];
         offset += 1;
-        let mut i = 0;
-        for i in 0..bottom_size{
+        for _i in 0..bottom_size{
             let cmd : u8 = in_bytes[offset];
             let str_size : u8 = in_bytes[offset + 1];
-            let i_string = BKString{cmd : cmd, string : in_bytes[offset + 2 .. offset + 2 + str_size as usize].to_vec()};
+            let i_string = BKString{cmd, string : in_bytes[offset + 2 .. offset + 2 + str_size as usize].to_vec()};
             bottom.push(i_string);
             offset += 2 + str_size as usize;
         }
@@ -120,16 +119,15 @@ impl Dialog{
         let mut top = Vec::new();
         let top_size : u8 = in_bytes[offset];
         offset += 1;
-        let mut i = 0;
-        for i in 0..top_size{
+        for _i in 0..top_size{
             let cmd : u8 = in_bytes[offset];
             let str_size : u8 = in_bytes[offset + 1];
-            let i_string = BKString{cmd : cmd, string : in_bytes[offset + 2 .. offset + 2 + str_size as usize].to_vec()};
+            let i_string = BKString{cmd, string : in_bytes[offset + 2 .. offset + 2 + str_size as usize].to_vec()};
             top.push(i_string);
             offset += 2 + str_size as usize;
         }
 
-        return Dialog{ bottom: bottom, top: top,};
+        Dialog{ bottom, top,}
     }
 
     pub fn read(path: &Path) -> Dialog{
@@ -146,7 +144,7 @@ impl Dialog{
             .map(|y|{BKString::from_yaml(y)})
             .collect();
 
-        Dialog{bottom: bottom, top: top}
+        Dialog{bottom, top}
     }
 }
 
@@ -165,11 +163,11 @@ impl Asset for Dialog{
             out.push(text.string.len() as u8);
             out.append(&mut text.string.clone());
         }
-        return out;
+        out
     }
 
     fn get_type(&self)->AssetType{
-        return AssetType::Dialog;
+        AssetType::Dialog
     }
 
     fn write(&self, path: &Path){
@@ -195,19 +193,19 @@ pub struct QuizQuestion{
 impl QuizQuestion{
     pub fn from_bytes(in_bytes: &[u8])->QuizQuestion{
         let mut texts = Vec::new();
-        let mut str_cnt = in_bytes[5];
+        let str_cnt = in_bytes[5];
         let mut offset : usize = 6;
         for _i in 0..str_cnt{
             let cmd : u8 = in_bytes[offset];
             let str_size : u8 = in_bytes[offset + 1];
-            let i_string = BKString{cmd : cmd, string : in_bytes[offset + 2 .. offset + 2 + str_size as usize].to_vec()};
+            let i_string = BKString{cmd, string : in_bytes[offset + 2 .. offset + 2 + str_size as usize].to_vec()};
             texts.push(i_string);
             offset += 2 + str_size as usize;
         }
         let (q_text, o_text) = texts.split_at(texts.len() - 3); 
 
         let options : [BKString; 3] = [o_text[0].clone(), o_text[1].clone(), o_text[2].clone()];
-        return QuizQuestion{ question: q_text.to_vec(), options: options};
+        QuizQuestion{ question: q_text.to_vec(), options}
     }
 
     pub fn read(path: &Path) -> QuizQuestion{
@@ -226,7 +224,7 @@ impl QuizQuestion{
 
         let options : [BKString; 3] = [a[0].clone(), a[1].clone(), a[2].clone()];
 
-        QuizQuestion{question: q, options: options}
+        QuizQuestion{question: q, options}
     }
 }
 
@@ -244,11 +242,11 @@ impl Asset for QuizQuestion{
             out.push(text.string.len() as u8);
             out.append(&mut text.string.clone());
         }
-        return out;
+        out
     }
     
     fn get_type(&self)->AssetType{
-        return AssetType::QuizQuestion
+        AssetType::QuizQuestion
     }
 
     fn write(&self, path: &Path){
@@ -274,19 +272,19 @@ pub struct GruntyQuestion{
 impl GruntyQuestion{
     pub fn from_bytes(in_bytes: &[u8])->GruntyQuestion{
         let mut texts = Vec::new();
-        let mut str_cnt = in_bytes[5];
+        let str_cnt = in_bytes[5];
         let mut offset : usize = 6;
         for _i in 0..str_cnt{
             let cmd : u8 = in_bytes[offset];
             let str_size : u8 = in_bytes[offset + 1];
-            let i_string = BKString{cmd : cmd, string : in_bytes[offset + 2 .. offset + 2 + str_size as usize].to_vec()};
+            let i_string = BKString{cmd, string : in_bytes[offset + 2 .. offset + 2 + str_size as usize].to_vec()};
             texts.push(i_string);
             offset += 2 + str_size as usize;
         }
         let (q_text, o_text) = texts.split_at(texts.len() - 3); 
 
         let options : [BKString; 3] = [o_text[0].clone(), o_text[1].clone(), o_text[2].clone()];
-        return GruntyQuestion{ question: q_text.to_vec(), options: options};
+        GruntyQuestion{ question: q_text.to_vec(), options}
     }
 
     pub fn read(path: &Path) -> GruntyQuestion{
@@ -305,7 +303,7 @@ impl GruntyQuestion{
 
         let options : [BKString; 3] = [a[0].clone(), a[1].clone(), a[2].clone()];
 
-        GruntyQuestion{question: q, options: options}
+        GruntyQuestion{question: q, options}
     }
 }
 
@@ -323,11 +321,11 @@ impl Asset for GruntyQuestion{
             out.push(text.string.len() as u8);
             out.append(&mut text.string.clone());
         }
-        return out;
+        out
     }
     
     fn get_type(&self)->AssetType{
-        return AssetType::GruntyQuestion
+        AssetType::GruntyQuestion
     }
 
     fn write(&self, path: &Path){
@@ -355,7 +353,7 @@ fn string_to_vecu8(string: &str) -> Vec<u8>{
     let mut string = string.as_bytes().to_vec();
     let mut squig_indx : Vec<usize> = string.windows(2)
         .enumerate()
-        .filter(|(_, win)|{match win {[0xC3, 0xBD]=> true, _=>false,} })
+        .filter(|(_, win)|{matches!(win, [0xC3, 0xBD]) })
         .map(|(i, _)|{i})
         .collect();
     squig_indx.reverse();
@@ -364,7 +362,7 @@ fn string_to_vecu8(string: &str) -> Vec<u8>{
         string.remove(i+1);
     }
     string.push(0);
-    return string
+    string
 }
 
 fn vecu8_to_string(bytes: &Vec<u8>) -> String{
@@ -378,7 +376,7 @@ fn vecu8_to_string(bytes: &Vec<u8>) -> String{
             out.push(ch);
         }
     }
-    return out
+    out
 }
 
 struct ContInput{
@@ -391,7 +389,7 @@ struct ContInput{
 impl ContInput{
     fn to_bytes(&self)->Vec<u8>{
         let b = self.buttons.to_be_bytes();
-        return vec![self.x as u8, self.y as u8, b[0], b[1], self.frames, 0x00];
+        vec![self.x as u8, self.y as u8, b[0], b[1], self.frames, 0x00]
     }
 
     fn from_yaml(yaml: &Yaml)->ContInput{
@@ -399,7 +397,7 @@ impl ContInput{
         let y = yaml["y"].as_i64().unwrap() as i8;
         let buttons = yaml["buttons"].as_i64().unwrap() as u16;
         let frames = yaml["frames"].as_i64().unwrap() as u8;
-        return ContInput{x: x, y: y, buttons: buttons, frames: frames}
+        ContInput{x, y, buttons, frames}
     }
 }
 
@@ -424,7 +422,7 @@ impl DemoButtonFile{
             })
             .collect();
         assert_eq!(expect_len, inputs.len()*6);
-        DemoButtonFile{inputs: inputs, frame1_flag: f1f}
+        DemoButtonFile{inputs, frame1_flag: f1f}
     }
 
     pub fn read(path: &Path) -> DemoButtonFile{
@@ -434,11 +432,11 @@ impl DemoButtonFile{
         assert_eq!(doc_type, "DemoInput");
         
         let inputs_yaml = doc["inputs"].as_vec().unwrap();
-        let mut inputs : Vec<ContInput> = inputs_yaml.iter().map(|y|{
+        let inputs : Vec<ContInput> = inputs_yaml.iter().map(|y|{
             ContInput::from_yaml(y)
         })
         .collect();
-        return DemoButtonFile{inputs:inputs, frame1_flag: f1f}
+        DemoButtonFile{inputs, frame1_flag: f1f}
     }
 }
 
@@ -447,25 +445,24 @@ impl Asset for DemoButtonFile{
         if self.inputs.is_empty() { return Vec::new(); }
 
         let mut output : Vec<u8> = (6*self.inputs.len() as u32).to_be_bytes().to_vec();
-        let mut input_bytes : Vec<u8> = self.inputs.iter().map(|i|{
+        let mut input_bytes : Vec<u8> = self.inputs.iter().flat_map(|i|{
             i.to_bytes()
         })
-        .flatten()
         .collect();
         input_bytes[5] = self.frame1_flag;
         output.append(&mut input_bytes);
-        return output;
+        output
     }
 
     fn get_type(&self)->AssetType{
-        return AssetType::DemoInput;
+        AssetType::DemoInput
     }
 
     fn write(&self, path: &Path){
         let mut demo_file = File::create(path).unwrap();
         writeln!(demo_file, "type: DemoInput").unwrap();
         writeln!(demo_file, "flag: 0x{:02X}", self.frame1_flag).unwrap();
-        if(self.inputs.len() == 0){
+        if self.inputs.is_empty() {
             writeln!(demo_file, "inputs: []").unwrap();
             return;
         }
@@ -499,11 +496,11 @@ impl MidiSeqFile{
 
 impl Asset for MidiSeqFile{
     fn to_bytes(&self)->Vec<u8>{
-        return self.bytes.clone();
+        self.bytes.clone()
     }
 
     fn get_type(&self)->AssetType{
-        return AssetType::Midi;
+        AssetType::Midi
     }
 
     fn write(&self, path: &Path){
@@ -810,7 +807,7 @@ impl LevelSetup{
         let map_idx = i - map_id_offset;
         
         let maps = LevelSetup::build_map_hash_set();
-        let map_name = maps.get(&map_idx).expect(format!("Expected {map_idx} to exist in maps").as_str());
+        let _map_name = maps.get(&map_idx).unwrap_or_else(|| panic!("Expected {map_idx} to exist in maps"));
         // println!("Parsing {map_name} {map_idx}");
 
         // Skip this file as it currently fails to parse
@@ -852,9 +849,9 @@ impl LevelSetup{
 
                     // dbg!(cubes_from, cubes_to);
 
-                    for x in cubes_from[0]..=cubes_to[0] {
-                        for y in cubes_from[1]..=cubes_to[1] {
-                            for z in cubes_from[2]..=cubes_to[2] {
+                    for _x in cubes_from[0]..=cubes_to[0] {
+                        for _y in cubes_from[1]..=cubes_to[1] {
+                            for _z in cubes_from[2]..=cubes_to[2] {
                                 // println!("x: {x} | y: {y} | z: {z}");
                                 let cubes = LevelSetup::get_cubes_from_reader(&mut reader);
 
@@ -1132,7 +1129,6 @@ impl LevelSetup{
                      !file_getNWords_ifExpected(file_ptr, 2, &sp2C, 3)
                      */
                     todo!("Cmd = 2");
-                    reader.read_n(3, |r| r.read_word());
                 },
                 3 => { // ->code7AF80_initCubeFromFile
                     let cube_type = reader.read_u8();
@@ -1321,11 +1317,11 @@ impl LevelSetup{
 
 impl Asset for LevelSetup{
     fn to_bytes(&self)->Vec<u8>{
-        return self.bytes.clone();
+        self.bytes.clone()
     }
 
     fn get_type(&self)->AssetType{
-        return AssetType::LevelSetup;
+        AssetType::LevelSetup
     }
 
     fn write(&self, path: &Path){
@@ -1357,11 +1353,11 @@ impl Animation{
 
 impl Asset for Animation{
     fn to_bytes(&self)->Vec<u8>{
-        return self.bytes.clone();
+        self.bytes.clone()
     }
 
     fn get_type(&self)->AssetType{
-        return AssetType::Animation;
+        AssetType::Animation
     }
 
     fn write(&self, path: &Path){
@@ -1393,11 +1389,11 @@ impl Model{
 
 impl Asset for Model{
     fn to_bytes(&self)->Vec<u8>{
-        return self.bytes.clone();
+        self.bytes.clone()
     }
 
     fn get_type(&self)->AssetType{
-        return AssetType::Model;
+        AssetType::Model
     }
 
     fn write(&self, path: &Path){
@@ -1429,11 +1425,11 @@ impl Texture {
             _ => bin,
         };
 
-        return Texture{
-            texture_type : texture_type, 
-            w : w,
-            h : h,
-            palette : palette,
+        Texture{
+            texture_type, 
+            w,
+            h,
+            palette,
             pixel_data : pixel_data.to_vec(),
         }
     }
@@ -1467,7 +1463,7 @@ impl Texture {
 
     pub fn rgba16_to_rgba32(rgba16 : &[u8])->Vec<u8>{
         return rgba16.chunks_exact(2)
-            .map(|a|{
+            .flat_map(|a|{
                 let val = u16::from_be_bytes([a[0], a[1]]);
                 let r16 = ((val >> 11) & 0x1f) as u8;
                 let g16 = ((val >> 6) & 0x1f) as u8;
@@ -1479,9 +1475,8 @@ impl Texture {
                 let b32 = (b16 << 3) | (b16 >> 3);
                 let a32 = (((a16 << 7) as i8) >> 7) as u8;
 
-                return [r32, g32, b32, a32]
+                [r32, g32, b32, a32]
             })
-            .flatten()
             .collect()
     }
 
@@ -1503,12 +1498,10 @@ impl Texture {
             })
             .collect();
 
-        return ci4
-            .into_iter()
-            .map(|a|{[a >> 4, a & 0xF]}) //cvt to ci8
-            .flatten()
-            .map(|indx|{pal[indx as usize]})
-            .flatten()
+        ci4
+            .iter()
+            .flat_map(|a|{[a >> 4, a & 0xF]})
+            .flat_map(|indx|{pal[indx as usize]})
             .collect()
     }
     pub fn ci8_to_rgba32(ci8 : &[u8], palatte: &[u8])->Vec<u8>{
@@ -1531,36 +1524,33 @@ impl Texture {
 
         return ci8
             .iter()
-            .map(|indx|{pal[*indx as usize]})
-            .flatten()
+            .flat_map(|indx|{pal[*indx as usize]})
             .collect()
     }
 
     pub fn i4_to_rgba32(i_4 : &[u8])->Vec<u8>{
-        return i_4.into_iter()
-            .map(|a|{
+        i_4.iter()
+            .flat_map(|a|{
                 let val1 = (a & 0xF0) | (a >> 4);
                 let val2 = (a << 4) | (a & 0xF);
                 [val1, val1, val1, 0xFF, val2, val2, val2, 0xFF]
             })
-            .flatten()
             .collect()
     }
 
     pub fn i8_to_rgba32(i_8 : &[u8])->Vec<u8>{
         return i_8.iter()
-            .map(|a|{
+            .flat_map(|a|{
                 let val = *a;
                 [val, val, val, 0xFF]
             })
-            .flatten()
             .collect()
     }
 
     pub fn ia4_to_rgba32(ia4 : &[u8])->Vec<u8>{
-        return ia4
-            .into_iter()
-            .map(|a|{
+        ia4
+            .iter()
+            .flat_map(|a|{
                 let i1 = (a & 0xE0) | (a >> 3) | (a >> 6);
                 let a1 = (((a << 3) as i8) >> 7) as u8;
                 let i2 = (a >> 1) & 0x7;
@@ -1568,7 +1558,6 @@ impl Texture {
                 let a2 = (((a << 7) as i8) >> 7) as u8;
                 [i1, i1, i1, a1, i2, i2, i2, a2]
             })
-            .flatten()
             .collect()
     }
 
@@ -1616,10 +1605,10 @@ impl SpriteChunk {
         *file_offset += data_size;
 
         SpriteChunk{
-            x : x, 
-            y : y, 
-            w : w, 
-            h : h,
+            x, 
+            y, 
+            w, 
+            h,
             pixel_data : data, 
         }
     }
@@ -1639,8 +1628,8 @@ impl SpriteFrame {
         let header = bin[file_offset..file_offset+0x14].to_vec();
         // println!("\t{:02X?}", &header);
         let frame_bin = &bin[file_offset..];
-        let x = i16::from_be_bytes([frame_bin[0], frame_bin[1]]) as isize;
-        let y = i16::from_be_bytes([frame_bin[2], frame_bin[3]]) as isize;
+        let _x = i16::from_be_bytes([frame_bin[0], frame_bin[1]]) as isize;
+        let _y = i16::from_be_bytes([frame_bin[2], frame_bin[3]]) as isize;
         let w = u16::from_be_bytes([frame_bin[4], frame_bin[5]]) as usize;
         let h = u16::from_be_bytes([frame_bin[6], frame_bin[7]]) as usize;
         let mut pxl_data : Vec<Vec<[u8;4]>> = vec![vec![[0; 4]; w]; h];
@@ -1679,7 +1668,7 @@ impl SpriteFrame {
                 }
             }
             ImgFmt::I4 => {
-                offset = offset;
+                //  offset = offset;
                 let mut i = 0;
                 while i < chunk_cnt{
                     chk_hdrs.push(bin[offset.. offset + 8].to_vec());
@@ -1688,7 +1677,7 @@ impl SpriteFrame {
                 }
             }
             ImgFmt::I8 => {
-                offset = offset;
+                // offset = offset;
                 let mut i = 0;
                 while i < chunk_cnt{
                     chk_hdrs.push(bin[offset.. offset + 8].to_vec());
@@ -1697,7 +1686,7 @@ impl SpriteFrame {
                 }
             }
             ImgFmt::RGBA32 => {
-                offset = offset;
+                // offset = offset;
                 let mut i = 0;
                 while i < chunk_cnt{
                     chk_hdrs.push(bin[offset.. offset + 8].to_vec());
@@ -1706,7 +1695,7 @@ impl SpriteFrame {
                 }
             }
             ImgFmt::RGBA16 => {
-                offset = offset;
+                // offset = offset;
                 let mut i = 0;
                 while i < chunk_cnt{
                     chk_hdrs.push(bin[offset.. offset + 8].to_vec());
@@ -1747,8 +1736,8 @@ impl SpriteFrame {
                 let row_data : Vec<&[u8]> = raw_data.chunks_exact(4*chnk.w).collect();
                 for (j,row) in row_data.iter().enumerate(){
                     for (i, pxl) in row.chunks_exact(4).enumerate(){
-                        let fx :isize = (chnk.x + i as isize) as isize;
-                        let fy :isize = (chnk.y + j as isize) as isize;
+                        let fx :isize = (chnk.x + i as isize);
+                        let fy :isize = (chnk.y + j as isize);
                         if (0 <= fx) && (fx < (w as isize)) && (0 <= fy) && (fy < (h as isize)){
                             pxl_data[fy as usize][fx as usize] = pxl.try_into().unwrap();
                         }
@@ -1762,7 +1751,7 @@ impl SpriteFrame {
             _ => None,
         };
 
-        SpriteFrame{w: w as usize,h: h as usize, header: header, chk_hdrs:chk_hdrs, palette : pal, pixel_data: pxl_data.into_iter().flatten().flatten().collect()}
+        SpriteFrame{w, h, header, chk_hdrs, palette : pal, pixel_data: pxl_data.into_iter().flatten().flatten().collect()}
     }
 }
 
@@ -1785,13 +1774,13 @@ impl Sprite{
             0x0800 => ImgFmt::RGBA32,
             _ => ImgFmt::Unknown(format),
         };
-        match frmt {
-            ImgFmt::Unknown(_) => {return Sprite{format: frmt, frame: Vec::new(), bytes: in_bytes.to_vec()}},
-            _=> {}
+
+        if let ImgFmt::Unknown(_) = frmt {
+            return Sprite{format: frmt, frame: Vec::new(), bytes: in_bytes.to_vec()}
         }
 
         if frame_cnt > 0x100{
-            let mut offset = 8 as usize;
+            let mut offset = 8_usize;
             let chunk = SpriteChunk::new(in_bytes, &mut offset, &ImgFmt::RGBA16);
             let frame = SpriteFrame{w:chunk.w, h:chunk.h, header: Vec::new(), chk_hdrs: vec![in_bytes[8..16].to_vec()], palette: None, pixel_data: Texture::rgba16_to_rgba32(&chunk.pixel_data)};
             return Sprite{format: frmt, frame: vec![frame], bytes: in_bytes.to_vec()};
@@ -1805,7 +1794,8 @@ impl Sprite{
                     SpriteFrame::new(in_bytes, 0x10 + offset as usize + 4*frame_cnt as usize, &frmt)
                 })
                 .collect(); 
-        return Sprite{format: frmt, frame: frames, bytes: in_bytes.to_vec()};
+
+        Sprite{format: frmt, frame: frames, bytes: in_bytes.to_vec()}
     }
 
     pub fn read(path: &Path) -> Sprite{
