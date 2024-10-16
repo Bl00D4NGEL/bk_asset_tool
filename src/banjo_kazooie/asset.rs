@@ -529,17 +529,15 @@ struct LevelSetupReader<'a> {
 }
 
 impl LevelSetupReader<'_> {
-    pub fn new(in_bytes: &[u8]) ->LevelSetupReader {
+    pub fn new(in_bytes: &[u8]) -> LevelSetupReader {
         LevelSetupReader {
             in_bytes,
             offset: 0
         }
     }
 
-    // This currently only advances the offset until we figure out what a n64 "word" is in Rust terms
-    pub fn read_word(&mut self) {
-        // the "word" size for n64 is 4
-        self.offset += 4;
+    pub fn read_word(&mut self) -> i32 {
+        self.read_i32()
     }
 
     // the BK code uses s32 instead of i32
@@ -619,10 +617,6 @@ impl LevelSetupReader<'_> {
         }
 
         out
-    }
-
-    pub fn peek_u8(&self) -> u8 {
-        self.in_bytes[self.offset]
     }
 
     pub fn read_u8_n(&mut self, n: usize) -> Vec<u8>{
@@ -767,19 +761,18 @@ enum NodeDataTypes {
     NodeData1(NodeData1),
     NodeData2(NodeData2),
     NodeData3(NodeData3),
-    // The C code only mallocs 4 bytes here
-    NodeData4(Option<i32>),
+    NodeData4(NodeData4),
 }
 
 #[derive(Clone, Debug)]
 struct NodeData1 {
-    unk_0: Option<[f32; 3]>,
-    unk_c: Option<f32>,
-    unk_10: Option<f32>,
-    unk_14: Option<f32>,
-    unk_18: Option<f32>,
-    unk_1c: Option<[f32; 3]>,
-    unk_28: Option<i32>, // word
+    position: Option<[f32; 3]>,
+    horizontal_speed: Option<f32>,
+    vertical_speed: Option<f32>,
+    rotation: Option<f32>,
+    accelaration: Option<f32>,
+    pitch_yaw_and_roll: Option<[f32; 3]>,
+    unknown: Option<i32>, // word
 }
 
 #[derive(Clone, Debug)]
@@ -790,15 +783,20 @@ struct NodeData2 {
 
 #[derive(Clone, Debug)]
 struct NodeData3 {
-    unk_0: Option<[f32; 3]>,
-    unk_c: Option<f32>,
-    unk_10: Option<f32>,
-    unk_14: Option<f32>,
-    unk_18: Option<f32>,
-    unk_1c: Option<f32>,
-    unk_20: Option<f32>,
-    unk_24: Option<[f32; 3]>,
+    position: Option<[f32; 3]>,
+    horizontal_speedd: Option<f32>,
+    vertical_speed: Option<f32>,
+    rotation: Option<f32>,
+    accelaration: Option<f32>,
+    close_distance: Option<f32>,
+    far_distance: Option<f32>,
+    pitch_yaw_roll: Option<[f32; 3]>,
     unk_30: Option<i32>, // word
+}
+
+#[derive(Clone, Debug)]
+struct NodeData4 {
+    unk_0: Option<i32>, // word
 }
 
 impl LevelSetup{
@@ -892,60 +890,53 @@ impl LevelSetup{
                         match camera_node_type {
                             0 => break,
                             1 => {
-                                // code336F0_func_802BA93C
+                                // cameraNodeType1_fromFile
                                 let mut node_data_type_1 = NodeData1{
-                                     unk_0: None,
-                                     unk_c: None,
-                                     unk_10: None,
-                                     unk_14: None,
-                                     unk_18: None,
-                                     unk_1c: None,
-                                     unk_28: None
+                                     position: None,
+                                     horizontal_speed: None,
+                                     vertical_speed: None,
+                                     rotation: None,
+                                     accelaration: None,
+                                     pitch_yaw_and_roll: None,
+                                     unknown: None
                                 };
 
                                 loop {
                                     match reader.read_u8() {
                                         0 => break,
                                         1 => {
-                                            // file_getNFloats_ifExpected(file_ptr, 1, arg1->unk0, 3)
-                                            node_data_type_1.unk_0 = Some([
+                                            node_data_type_1.position = Some([
                                                 reader.read_f32(),
                                                 reader.read_f32(),
                                                 reader.read_f32(),
                                             ]);
                                         },
                                         2 => {
-                                            // file_getFloat(file_ptr, &arg1->unkC);
-                                            node_data_type_1.unk_c = Some(reader.read_f32());
-                                            // file_getFloat(file_ptr, &arg1->unk10);
-                                            node_data_type_1.unk_10 = Some(reader.read_f32());
+                                            node_data_type_1.horizontal_speed = Some(reader.read_f32());
+                                            node_data_type_1.vertical_speed = Some(reader.read_f32());
                                         },
                                         3 => {
-                                            // file_getFloat(file_ptr, &arg1->unk14);
-                                            node_data_type_1.unk_14 = Some(reader.read_f32());
-                                            // file_getFloat(file_ptr, &arg1->unk18);
-                                            node_data_type_1.unk_18 = Some(reader.read_f32());
+                                            node_data_type_1.rotation = Some(reader.read_f32());
+                                            node_data_type_1.accelaration = Some(reader.read_f32());
                                         },
                                         4  => {
-                                            // file_getNFloats_ifExpected(file_ptr, 4, arg1->unk1C, 3)
-                                            node_data_type_1.unk_1c = Some([
+                                            node_data_type_1.pitch_yaw_and_roll = Some([
                                                 reader.read_f32(),
                                                 reader.read_f32(),
                                                 reader.read_f32(),
                                             ]);
                                         },
                                         5 =>  {
-                                            // file_getWord_ifExpected(file_ptr, 5, &arg1->unk28);
-                                            node_data_type_1.unk_28 = Some(reader.read_i32());
+                                            node_data_type_1.unknown = Some(reader.read_word());
                                         },
-                                        _ => panic!("Unknown Cmd = {cmd}")
+                                        _ => panic!("Unknown section = {cmd}")
                                     }
                                 }
                                 
                                 node_data.push(NodeDataTypes::NodeData1(node_data_type_1));
                             },
                             2 => {
-                                // ncCameraNodeType2_fromFile
+                                // cameraNodeType2_fromFile
                                 let mut node_data_type_2 = NodeData2{
                                     position: None,
                                     rotation: None,
@@ -955,7 +946,6 @@ impl LevelSetup{
                                     match reader.read_u8() {
                                         0 => break,
                                         1 => {
-                                            // f32s file_getNFloats_ifExpected(file_ptr, 1, arg1->position, 3)
                                             node_data_type_2.position = Some([
                                                 reader.read_f32(),
                                                 reader.read_f32(),
@@ -963,30 +953,29 @@ impl LevelSetup{
                                             ]);
                                         },
                                         2 => {
-                                            // f32s file_getNFloats_ifExpected(file_ptr, 2, arg1->rotation, 3)
                                             node_data_type_2.rotation = Some([
                                                 reader.read_f32(),
                                                 reader.read_f32(),
                                                 reader.read_f32(),
                                             ]);
                                         },
-                                        _ => panic!("Unknown cmd = {cmd}")
+                                        _ => panic!("Unknown section = {cmd}")
                                     }
                                 }
                             
                                 node_data.push(NodeDataTypes::NodeData2(node_data_type_2));
                             },
                             3 => {
-                                // func_802BA550
+                                // cameraNodeType3_fromFile
                                 let mut node_data_type_3 = NodeData3{
-                                    unk_0: None,
-                                    unk_c: None,
-                                    unk_10: None,
-                                    unk_14: None,
-                                    unk_18: None,
-                                    unk_1c: None,
-                                    unk_20: None,
-                                    unk_24: None,
+                                    position: None,
+                                    horizontal_speedd: None,
+                                    vertical_speed: None,
+                                    rotation: None,
+                                    accelaration: None,
+                                    close_distance: None,
+                                    far_distance: None,
+                                    pitch_yaw_roll: None,
                                     unk_30: None,
                                 };
 
@@ -994,59 +983,49 @@ impl LevelSetup{
                                     match reader.read_u8() {
                                         0 => break,
                                         1 => {
-                                            // file_getNFloats_ifExpected(file_ptr, 1, arg1->unk0, 3)
-                                            node_data_type_3.unk_0 = Some([
+                                            node_data_type_3.position = Some([
                                                 reader.read_f32(),
                                                 reader.read_f32(),
                                                 reader.read_f32(),
                                             ]);
                                         },
                                         2 => {
-                                            // file_getFloat(file_ptr, &arg1->unkC);
-                                            node_data_type_3.unk_c = Some(reader.read_f32());
-                                            // file_getFloat(file_ptr, &arg1->unk10);
-                                            node_data_type_3.unk_10 = Some(reader.read_f32());
+                                            node_data_type_3.horizontal_speedd = Some(reader.read_f32());
+                                            node_data_type_3.vertical_speed = Some(reader.read_f32());
                                         },
                                         3 => {
-                                            // file_getFloat(file_ptr, &arg1->unk14);
-                                            node_data_type_3.unk_14 = Some(reader.read_f32());
-                                            // file_getFloat(file_ptr, &arg1->unk18);
-                                            node_data_type_3.unk_18 = Some(reader.read_f32());
+                                            node_data_type_3.rotation = Some(reader.read_f32());
+                                            node_data_type_3.accelaration = Some(reader.read_f32());
                                         },
                                         4 => {
-                                            // file_getNFloats_ifExpected(file_ptr, 4, arg1->unk24, 3)
-                                            node_data_type_3.unk_24 = Some([
+                                            node_data_type_3.pitch_yaw_roll = Some([
                                                 reader.read_f32(),
                                                 reader.read_f32(),
                                                 reader.read_f32(),
                                             ]);
                                         },
                                         5 => {
-                                            // file_getWord_ifExpected(file_ptr, 5, &arg1->unk30);
-                                            node_data_type_3.unk_30 = Some(reader.read_i32());
+                                            node_data_type_3.unk_30 = Some(reader.read_word());
                                         },
                                         6 => {
-                                            // file_getFloat(file_ptr, &arg1->unk1C);
-                                            node_data_type_3.unk_1c = Some(reader.read_f32());
-                                            // file_getFloat(file_ptr, &arg1->unk20);
-                                            node_data_type_3.unk_20 = Some(reader.read_f32());
+                                            node_data_type_3.close_distance = Some(reader.read_f32());
+                                            node_data_type_3.far_distance = Some(reader.read_f32());
                                         },
-                                        _ => panic!("Unknown cmd = {cmd}")
+                                        _ => panic!("Unknown section = {cmd}")
                                     }
                                 }
                             
                                 node_data.push(NodeDataTypes::NodeData3(node_data_type_3));
                             },
                             4 => {
-                                // func_802BA244
-                                let mut node_data_type_4 = None;
+                                // cameraNodeType4_fromFile
+                                let mut node_data_type_4 = NodeData4{unk_0: None};
 
                                 loop {
                                     match reader.read_u8() {
                                         0 => break,
                                         1 => {
-                                            // file_getWord_ifExpected(file_ptr, 1, arg1)
-                                            node_data_type_4 = Some(reader.read_i32());
+                                            node_data_type_4.unk_0 = Some(reader.read_i32());
                                         },
                                         _ => panic!("Unknown Cmd = {cmd}")
                                     }
@@ -1067,7 +1046,7 @@ impl LevelSetup{
                     }
                 }, 
                 4 => {
-                    // func_80333B78
+                    // codeAC520_lightingListFromFile
                     loop {
                         let cmd = reader.read_u8();
 
@@ -1080,20 +1059,40 @@ impl LevelSetup{
                         }
 
                         // file_getNFloats_ifExpected(file_ptr, 2, sp4C, 3)
-                        reader.read_if_expected(2, |r| {
-                            r.read_n(3, |r| r.read_f32());
+                        let read_data = reader.read_if_expected(2, |r| {
+                            let sp4c = [
+                                r.read_f32(),
+                                r.read_f32(),
+                                r.read_f32()
+                            ];
 
                             // file_getNFloats_ifExpected(file_ptr, 3, sp44, 2)
-                            r.read_if_expected(3, |r| {
-                                r.read_n(2, |r| r.read_f32());
+                            if let Some((sp44, sp38)) = r.read_if_expected(3, |r| {
+                                let sp44 = [
+                                    r.read_f32(),
+                                    r.read_f32()
+                                ];
                                 
                                 // file_getNWords_ifExpected(file_ptr, 4, sp38, 3)
-                                r.read_if_expected(4, |r| {
-                                    r.read_n(3, |r| r.read_word());
-                                });
-                            });
+                                if let Some(sp38) = r.read_if_expected(4, |r| {
+                                    [
+                                        r.read_word(),
+                                        r.read_word(),
+                                        r.read_word()
+                                    ]
+                                }) {
+                                    (sp44, sp38)
+                                } else {
+                                    (sp44, [0_i32, 0_i32, 0_i32])
+                                }
+                            }) {
+                                (sp4c, sp44, sp38)
+                            } else {
+                                (sp4c, [0_f32, 0_f32], [0_i32, 0_i32, 0_i32])
+                            }
                         });
 
+                        // dbg!(read_data);
                     }
                 }, 
                 _ => {
