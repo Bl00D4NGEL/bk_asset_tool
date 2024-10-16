@@ -1,9 +1,8 @@
-use std::collections::btree_map::{IterMut, Keys};
 use std::collections::HashMap;
-use std::{default, fmt};
+use std::fmt;
 use std::fs::{self, File, DirBuilder};
 use std::io::{Write, BufWriter};
-use std::path::{Display, Path};
+use std::path::Path;
 use yaml_rust::{Yaml, YamlLoader};
 use png;
 
@@ -523,7 +522,8 @@ impl Asset for MidiSeqFile{
 #[derive(Clone, Debug)]
 pub struct LevelSetup {
     bytes: Vec<u8>,
-    cubes: Vec<LevelCubes>
+    cubes: Vec<LevelCubes>,
+    camera_nodes: Vec<CameraNode>,
 }
 
 struct LevelSetupReader<'a> {
@@ -660,7 +660,7 @@ impl fmt::Display for LevelSetupReader<'_> {
 struct LevelCubes {
     start_position: [i32; 3],
     end_position: [i32; 3],
-    cubes: Vec<LevelCube>
+    cubes: Vec<LevelCube>,
 }
 
 #[derive(Clone, Debug)]
@@ -708,12 +708,25 @@ enum LevelCubeBytes {
 impl LevelCubeBytes {
     pub fn new(bytes: &[u8]) -> LevelCubeBytes {
         if bytes.len() == 20 {
-            let yaw_and_scale = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
+            /*
+             * u32 yaw: 9; // unkC_31
+             * u32 scale: 23; // unkC_22
+             */
+            let unk_c = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
+            let yaw = unk_c & 0x1FF;
+            let scale = unk_c >> 9;
 
-            let unk6 = u16::from_be_bytes([bytes[6], bytes[7]]);
-            let radius = unk6 & 0x1FF;
-            let bit6 = (unk6 >> 9) & 0x3F;
-            let bit0 = unk6 >> 15;
+            /*
+             * struct {
+             * u16 radius: 9; //selector_value //volume??? diameter
+             * u16 bit6:  6; //category
+             * u16 bit0:  1;
+             * } unk6;
+             * */
+            let unk_6 = u16::from_be_bytes([bytes[6], bytes[7]]);
+            let radius = unk_6 & 0x1FF;
+            let bit6 = (unk_6 >> 9) & 0x3F;
+            let bit0 = unk_6 >> 15;
             
             LevelCubeBytes::NodePropBytes(NodeProp {
                 x: i16::from_be_bytes([bytes[0], bytes[1]]),
@@ -724,8 +737,8 @@ impl LevelCubeBytes {
                 bit0,
                 actor_id: u16::from_be_bytes([bytes[8], bytes[9]]),
                 unk_a: bytes[10],
-                yaw: yaw_and_scale & 0x1FF,
-                scale: yaw_and_scale >> 9,
+                yaw,
+                scale,
                 unk_10: u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]),
             })
         } else if bytes.len() == 12 {
@@ -745,6 +758,52 @@ struct LevelCube {
     bytes: LevelCubeBytes,
 }
 
+#[derive(Clone, Debug)]
+struct CameraNode {
+    index: i16,
+    node_type: u8, // 1-4
+    node_data: Vec<NodeDataTypes>,
+}
+
+#[derive(Clone, Debug)]
+enum NodeDataTypes {
+    NodeData1(NodeData1),
+    NodeData2(NodeData2),
+    NodeData3(NodeData3),
+    // The C code only mallocs 4 bytes here
+    NodeData4(Option<i32>),
+}
+
+#[derive(Clone, Debug)]
+struct NodeData1 {
+    unk_0: Option<[f32; 3]>,
+    unk_c: Option<f32>,
+    unk_10: Option<f32>,
+    unk_14: Option<f32>,
+    unk_18: Option<f32>,
+    unk_1c: Option<[f32; 3]>,
+    unk_28: Option<i32>, // word
+}
+
+#[derive(Clone, Debug)]
+struct NodeData2 {
+    position: Option<[f32; 3]>,
+    rotation: Option<[f32; 3]>,
+}
+
+#[derive(Clone, Debug)]
+struct NodeData3 {
+    unk_0: Option<[f32; 3]>,
+    unk_c: Option<f32>,
+    unk_10: Option<f32>,
+    unk_14: Option<f32>,
+    unk_18: Option<f32>,
+    unk_1c: Option<f32>,
+    unk_20: Option<f32>,
+    unk_24: Option<[f32; 3]>,
+    unk_30: Option<i32>, // word
+}
+
 impl LevelSetup{
     pub fn from_bytes(in_bytes: &[u8], i: usize)->LevelSetup{
         let map_id_offset = 1820;
@@ -756,10 +815,11 @@ impl LevelSetup{
 
         // Skip this file as it currently fails to parse
         if map_idx == 113 {
-            return LevelSetup{ bytes: in_bytes.to_vec(), cubes: vec![] };
+            return LevelSetup{ bytes: in_bytes.to_vec(), cubes: vec![], camera_nodes: vec![] };
         }
 
         let mut level_cubes = vec![];
+        let mut camera_nodes = vec![];
         let mut reader = LevelSetupReader::new(in_bytes);
         loop {
             let cmd = reader.read_u8();
@@ -799,23 +859,6 @@ impl LevelSetup{
                                 let cubes = LevelSetup::get_cubes_from_reader(&mut reader);
 
                                 if !cubes.is_empty() {
-                                    cubes.iter().for_each(|cube| {
-                                        let unk_c = match &cube.bytes {
-                                            LevelCubeBytes::NodePropBytes(bytes) => bytes.unk_c,
-                                            LevelCubeBytes::OtherNodeBytes(_) => 0,
-                                        };
-
-                                        if unk_c != 0 {
-                                            // Given unk_c = 0x77073030
-                                            // 01110111000001110011000000110000
-                                            // Yaw: 48, Scale: 3900312
-                                            // 0b11111111111111111111111000000000;
-                                            let maybe_yaw = unk_c & 0x1FF;
-                                            let maybe_scale = unk_c >> 9;
-                                            println!("UnkC {unk_c:X} {unk_c:032b} | {maybe_yaw:032b} / {maybe_yaw}  | {maybe_scale:032b} / {maybe_scale}", );
-                                        }
-                                    });
-
                                     level_cubes.push(LevelCubes {
                                         start_position: cubes_from,
                                         end_position: cubes_to,
@@ -844,121 +887,186 @@ impl LevelSetup{
                             panic!("Unexpected cmd {cmd}");
                         }
                         
-                        let _camera_node_index = reader.read_i16();
-                         // seems to be between 0 and 4
+                        let camera_node_index = reader.read_i16();
                         let camera_node_type = reader.read_if_expected(2, |r| r.read_u8()).unwrap_or(0);
-                        
+                        let mut node_data = vec![];
+
                         // println!("Camera node type = {camera_node_type}");
                         match camera_node_type {
                             0 => break,
                             1 => {
-                                // func_802BA93C
+                                // code336F0_func_802BA93C
+                                let mut node_data_type_1 = NodeData1{
+                                     unk_0: None,
+                                     unk_c: None,
+                                     unk_10: None,
+                                     unk_14: None,
+                                     unk_18: None,
+                                     unk_1c: None,
+                                     unk_28: None
+                                };
+
                                 loop {
                                     match reader.read_u8() {
                                         0 => break,
                                         1 => {
                                             // file_getNFloats_ifExpected(file_ptr, 1, arg1->unk0, 3)
-                                            reader.read_n(3, |r| r.read_f32());
+                                            node_data_type_1.unk_0 = Some([
+                                                reader.read_f32(),
+                                                reader.read_f32(),
+                                                reader.read_f32(),
+                                            ]);
                                         },
                                         2 => {
                                             // file_getFloat(file_ptr, &arg1->unkC);
-                                            reader.read_f32();
+                                            node_data_type_1.unk_c = Some(reader.read_f32());
                                             // file_getFloat(file_ptr, &arg1->unk10);
-                                            reader.read_f32();
+                                            node_data_type_1.unk_10 = Some(reader.read_f32());
                                         },
                                         3 => {
                                             // file_getFloat(file_ptr, &arg1->unk14);
-                                            reader.read_f32();
+                                            node_data_type_1.unk_14 = Some(reader.read_f32());
                                             // file_getFloat(file_ptr, &arg1->unk18);
-                                            reader.read_f32();
+                                            node_data_type_1.unk_18 = Some(reader.read_f32());
                                         },
                                         4  => {
                                             // file_getNFloats_ifExpected(file_ptr, 4, arg1->unk1C, 3)
-                                            reader.read_n(3, |r| r.read_f32());
+                                            node_data_type_1.unk_1c = Some([
+                                                reader.read_f32(),
+                                                reader.read_f32(),
+                                                reader.read_f32(),
+                                            ]);
                                         },
                                         5 =>  {
                                             // file_getWord_ifExpected(file_ptr, 5, &arg1->unk28);
-                                            reader.read_word();
+                                            node_data_type_1.unk_28 = Some(reader.read_i32());
                                         },
                                         _ => panic!("Unknown Cmd = {cmd}")
                                     }
                                 }
+                                
+                                node_data.push(NodeDataTypes::NodeData1(node_data_type_1));
                             },
                             2 => {
                                 // ncCameraNodeType2_fromFile
+                                let mut node_data_type_2 = NodeData2{
+                                    position: None,
+                                    rotation: None,
+                                };
+
                                 loop {
                                     match reader.read_u8() {
                                         0 => break,
                                         1 => {
                                             // f32s file_getNFloats_ifExpected(file_ptr, 1, arg1->position, 3)
-                                            // println!("cmd = 1: {}", LevelSetupReader::u8s_to_string(&reader.read_u8_n(12)));
-                                            reader.read_n(3, |r| r.read_f32());
+                                            node_data_type_2.position = Some([
+                                                reader.read_f32(),
+                                                reader.read_f32(),
+                                                reader.read_f32(),
+                                            ]);
                                         },
                                         2 => {
                                             // f32s file_getNFloats_ifExpected(file_ptr, 2, arg1->rotation, 3)
-                                            // println!("cmd = 2: {}", LevelSetupReader::u8s_to_string(&reader.read_u8_n(12)));
-                                            reader.read_n(3, |r| r.read_f32());
+                                            node_data_type_2.rotation = Some([
+                                                reader.read_f32(),
+                                                reader.read_f32(),
+                                                reader.read_f32(),
+                                            ]);
                                         },
                                         _ => panic!("Unknown cmd = {cmd}")
                                     }
                                 }
+                            
+                                node_data.push(NodeDataTypes::NodeData2(node_data_type_2));
                             },
                             3 => {
                                 // func_802BA550
+                                let mut node_data_type_3 = NodeData3{
+                                    unk_0: None,
+                                    unk_c: None,
+                                    unk_10: None,
+                                    unk_14: None,
+                                    unk_18: None,
+                                    unk_1c: None,
+                                    unk_20: None,
+                                    unk_24: None,
+                                    unk_30: None,
+                                };
+
                                 loop {
                                     match reader.read_u8() {
                                         0 => break,
                                         1 => {
                                             // file_getNFloats_ifExpected(file_ptr, 1, arg1->unk0, 3)
-                                            reader.read_n(3, |r| r.read_f32());
+                                            node_data_type_3.unk_0 = Some([
+                                                reader.read_f32(),
+                                                reader.read_f32(),
+                                                reader.read_f32(),
+                                            ]);
                                         },
                                         2 => {
                                             // file_getFloat(file_ptr, &arg1->unkC);
-                                            reader.read_f32();
+                                            node_data_type_3.unk_c = Some(reader.read_f32());
                                             // file_getFloat(file_ptr, &arg1->unk10);
-                                            reader.read_f32();
+                                            node_data_type_3.unk_10 = Some(reader.read_f32());
                                         },
                                         3 => {
                                             // file_getFloat(file_ptr, &arg1->unk14);
-                                            reader.read_f32();
+                                            node_data_type_3.unk_14 = Some(reader.read_f32());
                                             // file_getFloat(file_ptr, &arg1->unk18);
-                                            reader.read_f32();
+                                            node_data_type_3.unk_18 = Some(reader.read_f32());
                                         },
                                         4 => {
                                             // file_getNFloats_ifExpected(file_ptr, 4, arg1->unk24, 3)
-                                            reader.read_n(3, |r| r.read_f32());
+                                            node_data_type_3.unk_24 = Some([
+                                                reader.read_f32(),
+                                                reader.read_f32(),
+                                                reader.read_f32(),
+                                            ]);
                                         },
                                         5 => {
                                             // file_getWord_ifExpected(file_ptr, 5, &arg1->unk30);
-                                            reader.read_word();
+                                            node_data_type_3.unk_30 = Some(reader.read_i32());
                                         },
                                         6 => {
                                             // file_getFloat(file_ptr, &arg1->unk1C);
-                                            reader.read_f32();
+                                            node_data_type_3.unk_1c = Some(reader.read_f32());
                                             // file_getFloat(file_ptr, &arg1->unk20);
-                                            reader.read_f32();
+                                            node_data_type_3.unk_20 = Some(reader.read_f32());
                                         },
                                         _ => panic!("Unknown cmd = {cmd}")
                                     }
                                 }
+                            
+                                node_data.push(NodeDataTypes::NodeData3(node_data_type_3));
                             },
                             4 => {
                                 // func_802BA244
+                                let mut node_data_type_4 = None;
+
                                 loop {
                                     match reader.read_u8() {
                                         0 => break,
                                         1 => {
                                             // file_getWord_ifExpected(file_ptr, 1, arg1)
-                                            reader.read_word();
+                                            node_data_type_4 = Some(reader.read_i32());
                                         },
                                         _ => panic!("Unknown Cmd = {cmd}")
                                     }
                                 }
+
+                                node_data.push(NodeDataTypes::NodeData4(node_data_type_4));
                             },
                             _ => {
                                 panic!("Unknown camera_node_type {camera_node_type}");
                             },
                         }
+                        
+                        camera_nodes.push(CameraNode {
+                            index: camera_node_index,
+                            node_type: camera_node_type,
+                            node_data
+                        });
                     }
                 }, 
                 4 => {
@@ -998,10 +1106,7 @@ impl LevelSetup{
             }
         }
     
-    if map_idx == 1 {
-        // dbg!(&level_cubes);
-    }
-        LevelSetup {bytes: in_bytes.to_vec(), cubes: level_cubes}
+        LevelSetup {bytes: in_bytes.to_vec(), cubes: level_cubes,  camera_nodes}
     }
     
     fn get_cubes_from_reader(reader: &mut LevelSetupReader) -> Vec<LevelCube> {
@@ -1209,16 +1314,8 @@ impl LevelSetup{
         hs
     }
 
-    fn bytes_to_string_vec(in_bytes: Vec<u8>) -> String {
-        in_bytes.into_iter().map(|x| format!("{:02X}", x)).collect::<Vec<String>>().join(" ")
-    }
-
-    fn bytes_to_string_slice(in_bytes: &[u8]) -> String {
-        in_bytes.iter().map(|x| format!("{:02X}", x)).collect::<Vec<String>>().join(" ")
-    }
-
     pub fn read(path: &Path) -> LevelSetup{
-        LevelSetup{bytes: fs::read(path).unwrap(),cubes: vec![]}
+        LevelSetup{ bytes: fs::read(path).unwrap(),cubes: vec![], camera_nodes: vec![] }
     }
 }
 
