@@ -1,12 +1,13 @@
 use std::convert::TryInto;
 use std::fs::{self, DirBuilder};
-use std::io::{Write, Read};
 use std::path::Path;
+use std::io::Write;
 use yaml_rust::{YamlLoader,Yaml};
 
 use rarezip::bk;
 
 pub mod asset;
+pub mod level_setup;
 
 #[derive(Clone, Copy)]
 struct AssetMeta{
@@ -20,7 +21,7 @@ impl AssetMeta {
         let offset = u32::from_be_bytes([in_bytes[0], in_bytes[1], in_bytes[2], in_bytes[3]]);
         let c_flag = u16::from_be_bytes([in_bytes[4], in_bytes[5]]);
         let t_flag = u16::from_be_bytes([in_bytes[6], in_bytes[7]]);
-        return AssetMeta{offset: offset as usize, c_flag: c_flag != 0, t_flag: t_flag}
+        return AssetMeta{offset: offset as usize, c_flag: c_flag != 0, t_flag}
     }
 
     pub fn to_bytes(&self) -> Vec<u8>{
