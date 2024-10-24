@@ -179,13 +179,13 @@ impl AssetFolder{
             let mut tmp_str2: String;
             let file_ext = match data.get_type(){
                 asset::AssetType::Binary => ".bin",
-                asset::AssetType::Dialog => ".dialog",
-                asset::AssetType::GruntyQuestion => ".grunty_q",
-                asset::AssetType::QuizQuestion => ".quiz_q",
+                asset::AssetType::Dialog => ".dialog.yaml",
+                asset::AssetType::GruntyQuestion => ".grunty_q.yaml",
+                asset::AssetType::QuizQuestion => ".quiz_q.yaml",
                 asset::AssetType::DemoInput => ".demo",
                 asset::AssetType::Midi => ".midi.bin",
                 asset::AssetType::Model => ".model.bin",
-                asset::AssetType::LevelSetup => ".lvl_setup.bin",
+                asset::AssetType::LevelSetup => ".lvl_setup.yaml",
                 asset::AssetType::Animation => ".anim.bin",
                 asset::AssetType::Sprite(fmt) => {tmp_str2 = format!(".sprite.{:?}.bin",fmt).to_lowercase(); &tmp_str2.as_str()},
                 _ => ".bin"
