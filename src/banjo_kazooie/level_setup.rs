@@ -538,19 +538,155 @@ impl LevelSetup {
     }
 
     pub fn read(path: &Path) -> LevelSetup {
-        let doc =
-            &YamlLoader::load_from_str(&fs::read_to_string(path).expect("could not open yaml"))
-                .unwrap()[0];
+        let yaml_path = path.with_extension("yaml");
+
+        let doc = &YamlLoader::load_from_str(
+            &fs::read_to_string(yaml_path).expect("could not open yaml"),
+        )
+        .unwrap()[0];
         let doc_type = doc["type"].as_str().unwrap();
         assert_eq!(doc_type, "LevelSetup");
 
-        todo!("Implement read");
+        let start_position_vec = &doc["voxels"]["startPosition"];
+        let voxels_start_position = [
+            start_position_vec["x"].as_i64().unwrap() as i32,
+            start_position_vec["y"].as_i64().unwrap() as i32,
+            start_position_vec["z"].as_i64().unwrap() as i32,
+        ];
+
+        let end_position_vec = &doc["voxels"]["endPosition"];
+        let voxels_end_position = [
+            end_position_vec["x"].as_i64().unwrap() as i32,
+            end_position_vec["y"].as_i64().unwrap() as i32,
+            end_position_vec["z"].as_i64().unwrap() as i32,
+        ];
+
+        let yaml_voxels = &doc["voxels"]["voxels"].as_vec().unwrap();
+        let mut voxels = vec![];
+        for yaml_voxel in *yaml_voxels {
+            let mut objects = vec![];
+            let yaml_objects = &yaml_voxel["objects"].as_vec().unwrap();
+            for yaml_object in yaml_objects.iter() {
+                let object_bytes = yaml_object
+                    .as_vec()
+                    .unwrap()
+                    .iter()
+                    .map(|x| x.as_i64().unwrap() as u8)
+                    .collect::<Vec<u8>>();
+                if object_bytes.is_empty() {
+                    objects.push(None);
+                } else {
+                    objects.push(Some(object_bytes));
+                }
+            }
+
+            let mut props = vec![];
+            let yaml_props = &yaml_voxel["props"].as_vec().unwrap();
+            for yaml_prop in yaml_props.iter() {
+                let prop_bytes = yaml_prop
+                    .as_vec()
+                    .unwrap()
+                    .iter()
+                    .map(|x| x.as_i64().unwrap() as u8)
+                    .collect::<Vec<u8>>();
+                props.push(prop_bytes);
+            }
+            voxels.push(LevelVoxel { objects, props });
+        }
+
+        let yaml_camera_nodes = &doc["cameras"].as_vec().unwrap();
+        let mut camera_nodes = vec![];
+        for yaml_camera_node in yaml_camera_nodes.iter() {
+            let index = yaml_camera_node["index"].as_i64().unwrap() as i16;
+            let camera_type = yaml_camera_node["type"].as_i64().unwrap() as u8;
+
+            let mut sections = vec![];
+            for section in yaml_camera_node["sections"].as_vec().unwrap() {
+                sections.push(PayloadSection {
+                    index: section["section"].as_i64().unwrap() as u8,
+                    bytes: section["bytes"]
+                        .as_vec()
+                        .unwrap()
+                        .iter()
+                        .map(|x| x.as_i64().unwrap() as u8)
+                        .collect::<Vec<u8>>(),
+                });
+            }
+            camera_nodes.push(LevelCameraNode {
+                index,
+                camera_type,
+                sections,
+            });
+        }
+
+        let yaml_lighting_nodes = &doc["lightings"];
+        let mut lighting_nodes = vec![];
+        for yaml_lighting_node in yaml_lighting_nodes.as_vec().unwrap() {
+            let position = [
+                yaml_lighting_node["position"]["x"].as_f64().unwrap() as f32,
+                yaml_lighting_node["position"]["y"].as_f64().unwrap() as f32,
+                yaml_lighting_node["position"]["z"].as_f64().unwrap() as f32,
+            ];
+
+            let yaml_unknown_flags = yaml_lighting_node["flags"].as_vec().unwrap();
+            let flag_0 = yaml_unknown_flags[0]
+                .as_vec()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_i64().unwrap() as u8)
+                .collect::<Vec<u8>>();
+            let flag_1 = yaml_unknown_flags[1]
+                .as_vec()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_i64().unwrap() as u8)
+                .collect::<Vec<u8>>();
+            let unknown_flags = [
+                f32::from_be_bytes([flag_0[0], flag_0[1], flag_0[2], flag_0[3]]),
+                f32::from_be_bytes([flag_1[0], flag_1[1], flag_1[2], flag_1[3]]),
+            ];
+
+            let yaml_rgb = yaml_lighting_node["rgb"].as_str().unwrap();
+            lighting_nodes.push(LightingNode {
+                position,
+                unknown_flags,
+                rgb: [
+                    yaml_rgb.as_bytes()[0],
+                    yaml_rgb.as_bytes()[1],
+                    yaml_rgb.as_bytes()[2],
+                ],
+            });
+        }
+
+        LevelSetup {
+            bytes: vec![],
+            voxel_list: LevelVoxelList {
+                voxels,
+                start_position: voxels_start_position,
+                end_position: voxels_end_position,
+            },
+            camera_nodes: CameraNodeList {
+                nodes: camera_nodes,
+            },
+            lighting_nodes: LightingNodeList {
+                nodes: lighting_nodes,
+            },
+        }
     }
 }
 
 impl Asset for LevelSetup {
     fn to_bytes(&self) -> Vec<u8> {
-        self.bytes.to_vec()
+        let mut out_bytes: Vec<u8> = vec![];
+
+        self.voxel_list.as_bytes(&mut out_bytes);
+        self.camera_nodes.as_bytes(&mut out_bytes);
+        self.lighting_nodes.as_bytes(&mut out_bytes);
+
+        // EOF
+        out_bytes.push(0);
+
+        out_bytes
     }
 
     fn get_type(&self) -> AssetType {
@@ -586,7 +722,7 @@ impl Asset for LevelSetup {
         writeln!(yaml_file, "voxels:").unwrap();
         writeln!(
             yaml_file,
-            "  startPosition: {{ x: {}, y: {}, z: {} }}",
+            "  startPosition: {{ x: {:?}, y: {:?}, z: {:?} }}",
             self.voxel_list.start_position[0],
             self.voxel_list.start_position[1],
             self.voxel_list.start_position[2]
@@ -595,7 +731,7 @@ impl Asset for LevelSetup {
 
         writeln!(
             yaml_file,
-            "  endPosition: {{ x: {}, y: {}, z: {} }}",
+            "  endPosition: {{ x: {:?}, y: {:?}, z: {:?} }}",
             self.voxel_list.end_position[0],
             self.voxel_list.end_position[1],
             self.voxel_list.end_position[2]
@@ -632,46 +768,57 @@ impl Asset for LevelSetup {
             writeln!(yaml_file, "    }}").unwrap();
         }
 
-        writeln!(yaml_file, "cameras:").unwrap();
-        for camera_node in &self.camera_nodes.nodes {
-            writeln!(yaml_file, "  -").unwrap();
-            writeln!(yaml_file, "    index: {}", camera_node.index).unwrap();
-            writeln!(yaml_file, "    type: {}", camera_node.camera_type).unwrap();
-            writeln!(yaml_file, "    sections:",).unwrap();
-            for section in &camera_node.sections {
-                writeln!(
-                    yaml_file,
-                    "      - {{ section: {}, bytes: {} }}",
-                    section.index,
-                    u8s_to_byte_array_string(&section.bytes)
-                )
-                .unwrap();
+        if self.camera_nodes.nodes.is_empty() {
+            writeln!(yaml_file, "cameras: []").unwrap();
+        } else {
+            writeln!(yaml_file, "cameras:").unwrap();
+            for camera_node in &self.camera_nodes.nodes {
+                writeln!(yaml_file, "  -").unwrap();
+                writeln!(yaml_file, "    index: {}", camera_node.index).unwrap();
+                writeln!(yaml_file, "    type: {}", camera_node.camera_type).unwrap();
+                if camera_node.sections.is_empty() {
+                    writeln!(yaml_file, "    sections: []",).unwrap();
+                } else {
+                    writeln!(yaml_file, "    sections:",).unwrap();
+                    for section in &camera_node.sections {
+                        writeln!(
+                            yaml_file,
+                            "      - {{ section: {}, bytes: {} }}",
+                            section.index,
+                            u8s_to_byte_array_string(&section.bytes)
+                        )
+                        .unwrap();
+                    }
+                }
             }
         }
-
-        writeln!(yaml_file, "lightings:").unwrap();
-        for lighting_node in &self.lighting_nodes.nodes {
-            writeln!(yaml_file, "    - {{").unwrap();
-            writeln!(
-                yaml_file,
-                "      position: {{ x: {}, y: {}, z: {} }},",
-                lighting_node.position[0], lighting_node.position[1], lighting_node.position[2]
-            )
-            .unwrap();
-            writeln!(
-                yaml_file,
-                "      flags: [{}, {}],",
-                u8s_to_byte_array_string(&lighting_node.unknown_flags[0].to_be_bytes()),
-                u8s_to_byte_array_string(&lighting_node.unknown_flags[1].to_be_bytes())
-            )
-            .unwrap();
-            writeln!(
-                yaml_file,
-                "      rgb: {:02X}{:02X}{:02X}",
-                lighting_node.rgb[0], lighting_node.rgb[1], lighting_node.rgb[2]
-            )
-            .unwrap();
-            writeln!(yaml_file, "    }}").unwrap();
+        if self.lighting_nodes.nodes.is_empty() {
+            writeln!(yaml_file, "lightings: []").unwrap();
+        } else {
+            writeln!(yaml_file, "lightings:").unwrap();
+            for lighting_node in &self.lighting_nodes.nodes {
+                writeln!(yaml_file, "    - {{").unwrap();
+                writeln!(
+                    yaml_file,
+                    "      position: {{ x: {:?}, y: {:?}, z: {:?} }},",
+                    lighting_node.position[0], lighting_node.position[1], lighting_node.position[2]
+                )
+                .unwrap();
+                writeln!(
+                    yaml_file,
+                    "      flags: [{}, {}],",
+                    u8s_to_byte_array_string(&lighting_node.unknown_flags[0].to_be_bytes()),
+                    u8s_to_byte_array_string(&lighting_node.unknown_flags[1].to_be_bytes())
+                )
+                .unwrap();
+                writeln!(
+                    yaml_file,
+                    "      rgb: \"{:02X}{:02X}{:02X}\"",
+                    lighting_node.rgb[0], lighting_node.rgb[1], lighting_node.rgb[2]
+                )
+                .unwrap();
+                writeln!(yaml_file, "    }}").unwrap();
+            }
         }
     }
 }

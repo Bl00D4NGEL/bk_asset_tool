@@ -257,7 +257,7 @@ impl AssetFolder{
                 "DemoInput"         => Some(Box::new(asset::DemoButtonFile::read(&containing_folder.join(relative_path)))),
                 // "Midi"              => Some(Box::new(asset::MidiSeqFile::read(&containing_folder.join(relative_path)))),
                 // "Model"             => Some(Box::new(asset::Model::read(&containing_folder.join(relative_path)))),
-                // "LevelSetup"        => Some(Box::new(asset::LevelSetup::read(&containing_folder.join(relative_path)))),
+                "LevelSetup"        => Some(Box::new(level_setup::LevelSetup::read(&containing_folder.join(relative_path)))),
                 // "Animation"         => Some(Box::new(asset::Animation::read(&containing_folder.join(relative_path)))),
                 // x if x.starts_with("Sprite_") => Some(Box::new(asset::Sprite::read(&containing_folder.join(relative_path)))),
                 _ => Some(Box::new(asset::Binary::read(&containing_folder.join(relative_path)))),
