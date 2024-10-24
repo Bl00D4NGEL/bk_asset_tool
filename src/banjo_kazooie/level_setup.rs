@@ -202,10 +202,14 @@ impl Asset for LevelSetup {
     fn write(&self, path: &Path) {
         let mut yaml_file = File::create(path).unwrap();
 
-        writeln!(yaml_file, "type: LevelSetup").unwrap();
-        writeln!(yaml_file, "{}", self.voxel_list.to_yaml()).unwrap();
-        writeln!(yaml_file, "{}", self.camera_nodes.to_yaml()).unwrap();
-        writeln!(yaml_file, "{}", self.lighting_nodes.to_yaml()).unwrap();
+        let lines = [
+            "type: LevelSetup".to_string(),
+            self.voxel_list.to_yaml(),
+            self.camera_nodes.to_yaml(),
+            self.lighting_nodes.to_yaml(),
+        ];
+
+        yaml_file.write_all(lines.join("\n").as_bytes()).unwrap();
     }
 }
 
