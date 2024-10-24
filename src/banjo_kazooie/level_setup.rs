@@ -271,7 +271,7 @@ impl VoxelList {
         // file_getNWords_ifExpected(file_ptr, 1, sp50, 3)
         let start_position = reader
             .read_if_expected(1, |r| [r.read_word(), r.read_word(), r.read_word()])
-            .expect("Level setup should have negative position");
+            .expect("Level setup should have start position");
 
         // file_getNWords(file_ptr, sp44, 3)
         let end_position = [reader.read_word(), reader.read_word(), reader.read_word()];
@@ -287,8 +287,7 @@ impl VoxelList {
 
         // in the c code after the for loops there is:
         // file_isNextByteExpected(file_ptr, 0);
-        // which, in essence, advances the file_ptr by 1 if the current value is 0
-        reader.read_if_expected(0, |_| 0);
+        reader.read_if_expected(0, |_| 0).expect("Padding 0 to always be present");
 
         VoxelList {
             start_position,
@@ -339,20 +338,12 @@ impl VoxelList {
                     }
 
                     let next_expected = voxel_type + 1;
-                    let voxel_byte_size = 20;
-                    let voxel_bytes = reader
-                        .read_if_expected(next_expected, |r| r.read_u8_n(count * voxel_byte_size));
-
-                    if let Some(voxel_bytes) = voxel_bytes {
-                        voxel_bytes
-                            .chunks(voxel_byte_size)
-                            .for_each(|voxel| voxel_objects.push(Some(voxel.to_vec())));
-                    } else {
-                        panic!(
-                            "Did not read {voxel_byte_size}, count = {count}, found {}",
-                            reader.read_u8()
-                        );
-                    }
+                    let voxel_byte_size = 20; // sizeof(NodeProp) == sizeof(OtherProp)
+                    reader
+                        .read_if_expected(next_expected, |r| r.read_u8_n(count * voxel_byte_size))
+                        .unwrap_or_else(|| panic!("Should have read {count} * {voxel_byte_size} bytes because {next_expected} was expected. Instead got {}", reader.read_u8()))
+                        .chunks(voxel_byte_size)
+                        .for_each(|voxel| voxel_objects.push(Some(voxel.to_vec())));
                 }
                 8 => {
                     let count: usize = reader.read_u8().into();
@@ -360,17 +351,11 @@ impl VoxelList {
                         continue;
                     }
 
-                    let voxel_byte_size = 12; // sizeof(Prop)
-                    let voxel_bytes =
-                        reader.read_if_expected(9, |r| r.read_u8_n(count * voxel_byte_size));
-
-                    if let Some(voxel_bytes) = voxel_bytes {
-                        voxel_bytes.chunks(voxel_byte_size).for_each(|voxel| {
-                            voxel_props.push(voxel.to_vec());
-                        });
-                    } else {
-                        panic!("Did not read props?")
-                    }
+                    let prop_byte_size = 12; // sizeof(Prop)
+                    reader.read_if_expected(9, |r| r.read_u8_n(count * prop_byte_size))
+                        .unwrap_or_else(|| panic!("Should have read {count} * {prop_byte_size} bytes because 9 was expected. Instead got {}", reader.read_u8()))
+                        .chunks(prop_byte_size)
+                        .for_each(|voxel| voxel_props.push(voxel.to_vec()));
                 }
                 _ => {
                     panic!("Unexpected cmd {cmd}");
@@ -521,7 +506,7 @@ impl CameraNodeList {
             }
 
             let camera_node_index = reader.read_i16();
-            let camera_node_type = reader.read_if_expected(2, |r| r.read_u8()).unwrap_or(0);
+            let camera_node_type = reader.read_if_expected(2, |r| r.read_u8()).expect("Camera node type");
 
             let mut sections = vec![];
 
@@ -738,33 +723,22 @@ impl LightingNodeList {
                 panic!("Unexpected cmd = {cmd}");
             }
 
-            // file_getNFloats_ifExpected(file_ptr, 2, position, 3)
-            let (position, unknown_flags, rgb) = reader
-                .read_if_expected(2, |r| {
-                    let position = [r.read_f32(), r.read_f32(), r.read_f32()];
-
-                    // file_getNFloats_ifExpected(file_ptr, 3, unknown_flags, 2)
-                    let (unknown_flags, rgb) = r
-                        .read_if_expected(3, |r| {
-                            let unknown_flags = [r.read_f32(), r.read_f32()];
-
-                            // file_getNWords_ifExpected(file_ptr, 4, rgb, 3)
-                            let rgb = r
-                                .read_if_expected(4, |r| {
-                                    // the C code reads words, however only the last byte of the 4 read bytes contain the RGB hex value (0-255)
-                                    let rgb = r.read_u8_n(12);
-
-                                    [rgb[3], rgb[7], rgb[11]]
-                                })
-                                .expect("Unable to read RGB of lighting node");
-
-                            (unknown_flags, rgb)
-                        })
-                        .expect("Unable to read unknown flags of lighting node");
-
-                    (position, unknown_flags, rgb)
-                })
+            let position = reader
+                .read_if_expected(2, |r| [r.read_f32(), r.read_f32(), r.read_f32()])
                 .expect("Unable to read position of lighting node");
+
+            let unknown_flags = reader
+                .read_if_expected(3, |r| [r.read_f32(), r.read_f32()])
+                .expect("Unable to read unknown flags of lighting node");
+
+            let rgb = reader
+                .read_if_expected(4, |r| {
+                    // the C code reads words, however only the last byte of the 4 read bytes contain the RGB hex value (0-255 / 0xFF)
+                    let rgb = r.read_u8_n(12);
+
+                    [rgb[3], rgb[7], rgb[11]]
+                })
+                .expect("Unable to read RGB of lighting node");
 
             nodes.push(LightingNode {
                 position,
