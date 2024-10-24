@@ -91,24 +91,17 @@ impl LevelSetupReader<'_> {
 
     // the BK code uses s32 instead of i32
     fn read_i32(&mut self) -> i32 {
-        let out = i32::from_be_bytes([
-            self.in_bytes[self.offset],
-            self.in_bytes[self.offset + 1],
-            self.in_bytes[self.offset + 2],
-            self.in_bytes[self.offset + 3],
-        ]);
-
-        self.offset += 4;
-
-        out
+        i32::from_be_bytes([
+            self.read_u8(),
+            self.read_u8(),
+            self.read_u8(),
+            self.read_u8(),
+        ])
     }
 
     // the BK code uses s16 instead of i16
     fn read_i16(&mut self) -> i16 {
-        let out = i16::from_be_bytes([self.in_bytes[self.offset], self.in_bytes[self.offset + 1]]);
-        self.offset += 2;
-
-        out
+        i16::from_be_bytes([self.read_u8(), self.read_u8()])
     }
 
     fn read_u8(&mut self) -> u8 {
@@ -119,35 +112,19 @@ impl LevelSetupReader<'_> {
     }
 
     fn read_f32(&mut self) -> f32 {
-        let out = f32::from_be_bytes([
-            self.in_bytes[self.offset],
-            self.in_bytes[self.offset + 1],
-            self.in_bytes[self.offset + 2],
-            self.in_bytes[self.offset + 3],
-        ]);
-
-        self.offset += 4;
-
-        out
-    }
-
-    fn read_n<T>(
-        &mut self,
-        n: usize,
-        reader_fn: impl Fn(&mut LevelSetupReader) -> T,
-    ) -> Vec<T> {
-        let mut out = vec![];
-        for _ in 0..n {
-            out.push(reader_fn(self));
-        }
-
-        out
+        f32::from_be_bytes([
+            self.read_u8(),
+            self.read_u8(),
+            self.read_u8(),
+            self.read_u8(),
+        ])
     }
 
     fn read_u8_n(&mut self, n: usize) -> Vec<u8> {
-        return self.read_n(n, |r| r.read_u8());
-        let out = self.in_bytes[self.offset..(self.offset + n)].into();
-        self.offset += n;
+        let mut out = vec![];
+        for _ in 0..n {
+            out.push(self.read_u8());
+        }
 
         out
     }
@@ -771,7 +748,7 @@ impl LightingNodeList {
                             let rgb = r
                                 .read_if_expected(4, |r| {
                                     // the C code reads words, however only the last byte of the 4 read bytes contain the RGB hex value (0-255)
-                                    let rgb = r.read_n(12, |r| r.read_u8());
+                                    let rgb = r.read_u8_n(12);
 
                                     [rgb[3], rgb[7], rgb[11]]
                                 })
