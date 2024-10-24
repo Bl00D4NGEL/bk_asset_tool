@@ -19,6 +19,17 @@ fn u8s_to_readable_hex(in_bytes: &[u8], chunk_size: usize) -> String {
         .join("\n")
 }
 
+fn u8s_to_byte_array_string(bytes: &[u8]) -> String {
+    format!(
+        "[{}]",
+        bytes
+            .iter()
+            .map(|x| format!("0x{:02X}", x))
+            .collect::<Vec<String>>()
+            .join(", ")
+    )
+}
+
 // const DEBUG_MAP: &str = "SM_BANJOS_HOUSE";
 const DEBUG_MAP: &str = "SM_SPIRAL_MOUNTAIN";
 
@@ -74,6 +85,13 @@ struct CameraNodeList {
 #[derive(Clone, Debug)]
 struct LevelCameraNode {
     index: i16,
+    camera_type: u8,
+    sections: Vec<PayloadSection>,
+}
+
+#[derive(Clone, Debug)]
+struct PayloadSection {
+    index: u8,
     bytes: Vec<u8>,
 }
 
@@ -1200,7 +1218,7 @@ impl LevelSetupRaw {
                         let camera_node_type =
                             reader.read_if_expected(2, |r| r.read_u8()).unwrap_or(0);
 
-                        let mut camera_bytes = vec![camera_node_type];
+                        let mut sections = vec![];
 
                         match camera_node_type {
                             0 => {
@@ -1209,109 +1227,95 @@ impl LevelSetupRaw {
                             1 => {
                                 // cameraNodeType1_fromFile
                                 loop {
-                                    let cmd = reader.read_u8();
-                                    camera_bytes.push(cmd);
-                                    match cmd {
+                                    let section_index = reader.read_u8();
+                                    let section_bytes = match section_index {
                                         0 => break,
-                                        1 | 4 => {
-                                            camera_bytes.append(
-                                                &mut reader.read_f32().to_be_bytes().into(),
-                                            );
-                                            camera_bytes.append(
-                                                &mut reader.read_f32().to_be_bytes().into(),
-                                            );
-                                            camera_bytes.append(
-                                                &mut reader.read_f32().to_be_bytes().into(),
-                                            );
-                                        }
-                                        2 | 3 => {
-                                            camera_bytes.append(
-                                                &mut reader.read_f32().to_be_bytes().into(),
-                                            );
-                                            camera_bytes.append(
-                                                &mut reader.read_f32().to_be_bytes().into(),
-                                            );
-                                        }
-                                        5 => {
-                                            camera_bytes.append(
-                                                &mut reader.read_word().to_be_bytes().into(),
-                                            );
-                                        }
-                                        _ => panic!("Unknown section = {cmd}"),
-                                    }
+                                        1 | 4 => [
+                                            reader.read_f32().to_be_bytes(),
+                                            reader.read_f32().to_be_bytes(),
+                                            reader.read_f32().to_be_bytes(),
+                                        ]
+                                        .as_flattened()
+                                        .to_vec(),
+                                        2 | 3 => [
+                                            reader.read_f32().to_be_bytes(),
+                                            reader.read_f32().to_be_bytes(),
+                                        ]
+                                        .as_flattened()
+                                        .to_vec(),
+                                        5 => reader.read_word().to_be_bytes().to_vec(),
+                                        _ => panic!("Unknown section = {section_index}"),
+                                    };
+
+                                    sections.push(PayloadSection {
+                                        index: section_index,
+                                        bytes: section_bytes,
+                                    });
                                 }
                             }
                             2 => {
                                 // cameraNodeType2_fromFile
                                 loop {
-                                    let cmd = reader.read_u8();
-                                    camera_bytes.push(cmd);
-                                    match cmd {
+                                    let section_index = reader.read_u8();
+                                    let section_bytes = match section_index {
                                         0 => break,
-                                        1 | 2 => {
-                                            camera_bytes.append(
-                                                &mut reader.read_f32().to_be_bytes().into(),
-                                            );
-                                            camera_bytes.append(
-                                                &mut reader.read_f32().to_be_bytes().into(),
-                                            );
-                                            camera_bytes.append(
-                                                &mut reader.read_f32().to_be_bytes().into(),
-                                            );
-                                        }
-                                        _ => panic!("Unknown section = {cmd}"),
-                                    }
+                                        1 | 2 => [
+                                            reader.read_f32().to_be_bytes(),
+                                            reader.read_f32().to_be_bytes(),
+                                            reader.read_f32().to_be_bytes(),
+                                        ]
+                                        .as_flattened()
+                                        .to_vec(),
+                                        _ => panic!("Unknown section = {section_index}"),
+                                    };
+
+                                    sections.push(PayloadSection {
+                                        index: section_index,
+                                        bytes: section_bytes,
+                                    });
                                 }
                             }
                             3 => {
                                 // cameraNodeType3_fromFile
                                 loop {
-                                    let cmd = reader.read_u8();
-                                    camera_bytes.push(cmd);
-                                    match cmd {
+                                    let section_index = reader.read_u8();
+                                    let section_bytes = match section_index {
                                         0 => break,
-                                        1 | 4 => {
-                                            camera_bytes.append(
-                                                &mut reader.read_f32().to_be_bytes().into(),
-                                            );
-                                            camera_bytes.append(
-                                                &mut reader.read_f32().to_be_bytes().into(),
-                                            );
-                                            camera_bytes.append(
-                                                &mut reader.read_f32().to_be_bytes().into(),
-                                            );
-                                        }
-                                        2 | 3 | 6 => {
-                                            camera_bytes.append(
-                                                &mut reader.read_f32().to_be_bytes().into(),
-                                            );
-                                            camera_bytes.append(
-                                                &mut reader.read_f32().to_be_bytes().into(),
-                                            );
-                                        }
-                                        5 => {
-                                            camera_bytes.append(
-                                                &mut reader.read_word().to_be_bytes().into(),
-                                            );
-                                        }
-                                        _ => panic!("Unknown section = {cmd}"),
-                                    }
+                                        1 | 4 => [
+                                            reader.read_f32().to_be_bytes(),
+                                            reader.read_f32().to_be_bytes(),
+                                            reader.read_f32().to_be_bytes(),
+                                        ]
+                                        .as_flattened()
+                                        .to_vec(),
+                                        2 | 3 | 6 => [
+                                            reader.read_f32().to_be_bytes(),
+                                            reader.read_f32().to_be_bytes(),
+                                        ]
+                                        .as_flattened()
+                                        .to_vec(),
+                                        5 => reader.read_word().to_be_bytes().to_vec(),
+                                        _ => panic!("Unknown section = {section_index}"),
+                                    };
+                                    sections.push(PayloadSection {
+                                        index: section_index,
+                                        bytes: section_bytes,
+                                    });
                                 }
                             }
                             4 => {
                                 // cameraNodeType4_fromFile
                                 loop {
-                                    let cmd = reader.read_u8();
-                                    camera_bytes.push(cmd);
-                                    match cmd {
+                                    let section_index = reader.read_u8();
+                                    let section_bytes = match section_index {
                                         0 => break,
-                                        1 => {
-                                            camera_bytes.append(
-                                                &mut reader.read_i32().to_be_bytes().into(),
-                                            );
-                                        }
-                                        _ => panic!("Unknown section = {cmd}"),
-                                    }
+                                        1 => reader.read_i32().to_be_bytes().to_vec(),
+                                        _ => panic!("Unknown section = {section_index}"),
+                                    };
+                                    sections.push(PayloadSection {
+                                        index: section_index,
+                                        bytes: section_bytes,
+                                    });
                                 }
                             }
                             _ => {
@@ -1321,7 +1325,8 @@ impl LevelSetupRaw {
 
                         camera_nodes.push(LevelCameraNode {
                             index: camera_node_index,
-                            bytes: camera_bytes,
+                            camera_type: camera_node_type,
+                            sections,
                         });
                     }
                 }
@@ -1501,6 +1506,93 @@ impl Asset for LevelSetupRaw {
             .unwrap();
 
         bin_file.write_all(&out_bytes).unwrap();
+
+        if out_bytes.ne(&self.bytes) {
+            panic!("Byte mismatch for {path:?}");
+        }
+
+        let mut yaml_file = File::create(path.with_extension("yaml")).unwrap();
+
+        writeln!(yaml_file, "type: LevelSetup").unwrap();
+        writeln!(yaml_file, "voxels:").unwrap();
+        if let Some(negative_position) = self.voxel_list.negative_position {
+            writeln!(
+                yaml_file,
+                "  startPosition: {{ x: {}, y: {}, z: {} }}",
+                negative_position[0], negative_position[1], negative_position[2]
+            )
+            .unwrap();
+        }
+
+        writeln!(
+            yaml_file,
+            "  endPosition: {{ x: {}, y: {}, z: {} }}",
+            self.voxel_list.positive_position[0],
+            self.voxel_list.positive_position[1],
+            self.voxel_list.positive_position[2]
+        )
+        .unwrap();
+        writeln!(yaml_file, "  voxels:").unwrap();
+
+        for voxel in &self.voxel_list.voxels {
+            writeln!(yaml_file, "    -").unwrap();
+            writeln!(yaml_file, "      objects:").unwrap();
+            for object in &voxel.objects {
+                match object {
+                    Some(bytes) => {
+                        writeln!(yaml_file, "      - {}", u8s_to_byte_array_string(bytes)).unwrap();
+                    }
+                    None => {
+                        writeln!(yaml_file, "      - []").unwrap();
+                    }
+                }
+            }
+            writeln!(yaml_file, "      props:").unwrap();
+            for prop in &voxel.props {
+                writeln!(yaml_file, "      - {}", u8s_to_byte_array_string(prop)).unwrap();
+            }
+        }
+
+        writeln!(yaml_file, "cameras:").unwrap();
+        for camera_node in &self.camera_nodes.nodes {
+            writeln!(yaml_file, "  -").unwrap();
+            writeln!(yaml_file, "    index: {}", camera_node.index).unwrap();
+            writeln!(yaml_file, "    type: {}", camera_node.camera_type).unwrap();
+            writeln!(yaml_file, "    sections:",).unwrap();
+            for section in &camera_node.sections {
+                writeln!(
+                    yaml_file,
+                    "      - {{ section: {}, bytes: {} }}",
+                    section.index,
+                    u8s_to_byte_array_string(&section.bytes)
+                )
+                .unwrap();
+            }
+        }
+
+        writeln!(yaml_file, "lightings:").unwrap();
+        for lighting_node in &self.lighting_nodes.nodes {
+            writeln!(yaml_file, "    -").unwrap();
+            writeln!(
+                yaml_file,
+                "    position: {{ x: {}, y: {}, z: {} }}",
+                lighting_node.position[0], lighting_node.position[1], lighting_node.position[2]
+            )
+            .unwrap();
+            writeln!(
+                yaml_file,
+                "    flags: [{}, {}]",
+                u8s_to_byte_array_string(&lighting_node.unknown_flags[0].to_be_bytes()),
+                u8s_to_byte_array_string(&lighting_node.unknown_flags[1].to_be_bytes())
+            )
+            .unwrap();
+            writeln!(
+                yaml_file,
+                "    rgb: {:02X}{:02X}{:02X}",
+                lighting_node.rgb[0], lighting_node.rgb[1], lighting_node.rgb[2]
+            )
+            .unwrap();
+        }
     }
 }
 
@@ -1572,7 +1664,14 @@ impl CameraNodeList {
             out_bytes.push(1);
             out_bytes.append(&mut node.index.to_be_bytes().into());
             out_bytes.push(2);
-            out_bytes.append(&mut node.bytes.clone());
+            out_bytes.push(node.camera_type);
+            if !node.sections.is_empty() {
+                for section in &node.sections {
+                    out_bytes.push(section.index);
+                    out_bytes.append(&mut section.bytes.clone());
+                }
+                out_bytes.push(0);
+            }
         }
         out_bytes.push(0);
     }
@@ -1601,7 +1700,7 @@ impl LightingNodeList {
         out_bytes.push(0);
     }
 }
-
+/*
 impl LevelSetup {
     pub fn from_bytes(in_bytes: &[u8], i: usize) -> LevelSetup {
         let map_id_offset = 1820;
@@ -2126,3 +2225,4 @@ impl Asset for LevelSetup {
         bin_file.write_all(&self.bytes).unwrap();
     }
 }
+ */
