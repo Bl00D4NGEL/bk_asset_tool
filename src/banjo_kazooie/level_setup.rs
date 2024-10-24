@@ -78,19 +78,19 @@ struct LevelSetupReader<'a> {
 }
 
 impl LevelSetupReader<'_> {
-    pub fn new(in_bytes: &[u8]) -> LevelSetupReader {
+    fn new(in_bytes: &[u8]) -> LevelSetupReader {
         LevelSetupReader {
             in_bytes,
             offset: 0,
         }
     }
 
-    pub fn read_word(&mut self) -> i32 {
+    fn read_word(&mut self) -> i32 {
         self.read_i32()
     }
 
     // the BK code uses s32 instead of i32
-    pub fn read_i32(&mut self) -> i32 {
+    fn read_i32(&mut self) -> i32 {
         let out = i32::from_be_bytes([
             self.in_bytes[self.offset],
             self.in_bytes[self.offset + 1],
@@ -104,21 +104,21 @@ impl LevelSetupReader<'_> {
     }
 
     // the BK code uses s16 instead of i16
-    pub fn read_i16(&mut self) -> i16 {
+    fn read_i16(&mut self) -> i16 {
         let out = i16::from_be_bytes([self.in_bytes[self.offset], self.in_bytes[self.offset + 1]]);
         self.offset += 2;
 
         out
     }
 
-    pub fn read_u8(&mut self) -> u8 {
+    fn read_u8(&mut self) -> u8 {
         let out = self.in_bytes[self.offset];
         self.offset += 1;
 
         out
     }
 
-    pub fn read_f32(&mut self) -> f32 {
+    fn read_f32(&mut self) -> f32 {
         let out = f32::from_be_bytes([
             self.in_bytes[self.offset],
             self.in_bytes[self.offset + 1],
@@ -131,7 +131,7 @@ impl LevelSetupReader<'_> {
         out
     }
 
-    pub fn read_n<T>(
+    fn read_n<T>(
         &mut self,
         n: usize,
         reader_fn: impl Fn(&mut LevelSetupReader) -> T,
@@ -144,7 +144,7 @@ impl LevelSetupReader<'_> {
         out
     }
 
-    pub fn read_u8_n(&mut self, n: usize) -> Vec<u8> {
+    fn read_u8_n(&mut self, n: usize) -> Vec<u8> {
         return self.read_n(n, |r| r.read_u8());
         let out = self.in_bytes[self.offset..(self.offset + n)].into();
         self.offset += n;
@@ -152,7 +152,7 @@ impl LevelSetupReader<'_> {
         out
     }
 
-    pub fn read_if_expected<T>(
+    fn read_if_expected<T>(
         &mut self,
         expected_value: u8,
         reader_fn: impl Fn(&mut LevelSetupReader) -> T,
