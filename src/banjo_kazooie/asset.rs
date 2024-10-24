@@ -4,7 +4,7 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 use yaml_rust::{Yaml, YamlLoader};
 
-use super::level_setup::LevelSetup;
+use super::level_setup::LevelSetupRaw;
 
 pub fn from_seg_indx_and_bytes(segment: usize, i: usize, in_bytes: &[u8]) -> Box<dyn Asset> {
     match segment {
@@ -14,7 +14,7 @@ pub fn from_seg_indx_and_bytes(segment: usize, i: usize, in_bytes: &[u8]) -> Box
             [0x00, 0x00, 0x00, 0x0B, ..] => Box::new(Model::from_bytes(in_bytes)),
             _ => Box::new(Sprite::from_bytes(in_bytes)),
         }, //sprites
-        2 => Box::new(LevelSetup::from_bytes(in_bytes, i)),
+        2 => Box::new(LevelSetupRaw::from_bytes(in_bytes)),
         4 => match in_bytes {
             //Dialog, GruntyQuestions, QuizQuestions, DemoButtonFiles
             [0x01, 0x01, 0x02, 0x05, 0x00, ..] => Box::new(QuizQuestion::from_bytes(in_bytes)),

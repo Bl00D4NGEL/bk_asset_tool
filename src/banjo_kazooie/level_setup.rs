@@ -1,9 +1,23 @@
+use std::collections::HashMap;
+use std::fs::{self, File};
 use std::io::Write;
 use std::{fmt, path::Path};
-use std::fs::{self, File};
-use std::collections::HashMap;
 
 use super::asset::{Asset, AssetType};
+
+fn u8s_to_readable_hex(in_bytes: &[u8], chunk_size: usize) -> String {
+    in_bytes
+        .chunks(chunk_size)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .map(|x| format!("{:02X}", x))
+                .collect::<Vec<String>>()
+                .join(" ")
+        })
+        .collect::<Vec<String>>()
+        .join("\n")
+}
 
 // const DEBUG_MAP: &str = "SM_BANJOS_HOUSE";
 const DEBUG_MAP: &str = "SM_SPIRAL_MOUNTAIN";
@@ -21,6 +35,46 @@ pub struct LevelSetup {
     cubes: Vec<LevelCubes>,
     camera_nodes: Vec<CameraNode>,
     lighting_nodes: Vec<LightingNode>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LevelSetupRaw {
+    bytes: Vec<u8>,
+    voxel_list: LevelVoxelList,
+    camera_nodes: CameraNodeList,
+    lighting_nodes: LightingNodeList,
+}
+
+type VoxelObject = Option<Vec<u8>>; // 20 bytes
+type VoxelProp = Vec<u8>; // 16 bytes
+
+#[derive(Clone, Debug)]
+struct LevelVoxelList {
+    negative_position: Option<[i32; 3]>,
+    positive_position: [i32; 3],
+    voxels: Vec<LevelVoxel>,
+}
+
+#[derive(Clone, Debug)]
+struct LevelVoxel {
+    objects: Vec<VoxelObject>,
+    props: Vec<VoxelProp>,
+}
+
+#[derive(Clone, Debug)]
+struct LightingNodeList {
+    nodes: Vec<LightingNode>,
+}
+
+#[derive(Clone, Debug)]
+struct CameraNodeList {
+    nodes: Vec<LevelCameraNode>,
+}
+
+#[derive(Clone, Debug)]
+struct LevelCameraNode {
+    index: i16,
+    bytes: Vec<u8>,
 }
 
 struct LevelSetupReader<'a> {
@@ -143,14 +197,6 @@ impl LevelSetupReader<'_> {
             None
         }
     }
-
-    pub fn u8s_to_string(in_bytes: &[u8]) -> String {
-        in_bytes
-            .iter()
-            .map(|x| format!("{:02X}", x))
-            .collect::<Vec<String>>()
-            .join(" ")
-    }
 }
 
 impl fmt::Display for LevelSetupReader<'_> {
@@ -232,9 +278,9 @@ struct RadiusNode {
     x: i16,
     y: i16,
     z: i16,
-    radius: u16, // Radius » 1
-    bit6: u8, // probably unused
-    bit0: bool, // some sort of flag, probably unused for the radius node
+    radius: u16,        // Radius » 1
+    bit6: u8,           // probably unused
+    bit0: bool,         // some sort of flag, probably unused for the radius node
     associated_id: u16, // for stuff like flags?
     unknown_1: u8,
     unknown_2: u8,
@@ -270,7 +316,7 @@ impl RadiusNode {
             unknown_6: bytes[15],
             current_nodes: u16::from_be_bytes([bytes[16], bytes[17]]),
             next_nodes: u16::from_be_bytes([bytes[17], bytes[18]]),
-    }
+        }
     }
 }
 
@@ -321,13 +367,13 @@ impl LevelVoxelType {
 
             let maybe_script_id = u16::from_be_bytes([bytes[6], bytes[7]]);
             let maybe_object_id = u16::from_be_bytes([bytes[8], bytes[9]]); // unk8
-            // grab first 9 bits
+                                                                            // grab first 9 bits
             let radius = maybe_script_id >> 7;
             // grab 2nd to 7th bit (inclusive)
             let bit6 = (bytes[7] & 0x7F) >> 1;
             // grab last bit
             let bit0 = bytes[7] & 0x1 == 1;
-            let unk_a = bytes[10];                  
+            let unk_a = bytes[10];
             let unk_10 = u32::from_be_bytes([bytes[15], bytes[16], bytes[17], bytes[18]]);
             let _unk_10_0 = unk_10 & 0x3;
             // let pad_10_5 = (unk_10 >> 2) & 0x8;
@@ -356,13 +402,13 @@ impl LevelVoxelType {
                     // some others are calls to func_802C169C which calls func_802C16CC
                     // therefore: if 0 < maybe_object_id < 311 then this voxel is very likely a warp
                     if maybe_object_id < 311 {
-                        return LevelVoxelType::Radius(RadiusNode::from_bytes(bytes))
+                        return LevelVoxelType::Radius(RadiusNode::from_bytes(bytes));
                     }
                 }
                 if bit6 == 4 {
                     // 4 is a radius trigger for camera it seems
                     // there's a total of 251 trigger points, however some of them are (func_80334430) which is an empty function
-                    return LevelVoxelType::Radius(RadiusNode::from_bytes(bytes))
+                    return LevelVoxelType::Radius(RadiusNode::from_bytes(bytes));
                 }
                 if bit6 == 7 {
                     // calls func_803065E4(maybe_object_id, [x, y, z], radius, unk10_31, unk10_7) in func_803303B8
@@ -1074,15 +1120,486 @@ struct NodeData4 {
 
 #[derive(Clone, Debug)]
 struct LightingNode {
-    position: Option<[f32; 3]>,
-    // some unknown factor which is used to calculate an RGB modifier to modify the vertex RGB
+    position: [f32; 3],
+    // some unknown factors which are used to calculate an RGB modifier to modify the vertex RGB
     // goes up in steps of 0.125
-    unknown_1: Option<f32>,
-    // some unknown factor which is used to calculate an RGB modifier to modify the vertex RGB
-    // goes up in steps of 0.125
-    // it looks like this also determines the minimum distance between lighting position and vertex position as to where the rgb modification should take place
-    unknown_2: Option<f32>,
-    rgb: Option<[u8; 3]>,
+    // it looks like the second flag also determines the minimum distance between lighting position and vertex position as to where the rgb modification should take place
+    unknown_flags: [f32; 2],
+    rgb: [u8; 3],
+}
+
+impl LevelSetupRaw {
+    pub fn from_bytes(in_bytes: &[u8]) -> LevelSetupRaw {
+        let mut voxels_list: Option<LevelVoxelList> = None;
+        let mut camera_nodes: Vec<LevelCameraNode> = vec![];
+        let mut lighting_nodes: Vec<LightingNode> = vec![];
+        let mut reader = LevelSetupReader::new(in_bytes);
+        loop {
+            let cmd = reader.read_u8();
+            match cmd {
+                0 => {
+                    break;
+                }
+                1 => {
+                    assert!(
+                        voxels_list.is_none(),
+                        "Only one voxel definition per level setup expected"
+                    );
+                    // cubeList_fromFile
+                    // file_getNWords_ifExpected(file_ptr, 1, sp50, 3)
+                    let mut voxel_negative_position: [i32; 3] = [0, 0, 0];
+                    let should_read = reader.read_u8();
+                    if should_read == 1 {
+                        voxel_negative_position =
+                            [reader.read_word(), reader.read_word(), reader.read_word()];
+                    } else {
+                        println!("Not reading cubes-from, {}", reader);
+                    }
+
+                    // file_getNWords(file_ptr, sp44, 3)
+                    let voxel_positive_position =
+                        [reader.read_word(), reader.read_word(), reader.read_word()];
+
+                    let mut voxels = vec![];
+                    for _x in voxel_negative_position[0]..=voxel_positive_position[0] {
+                        for _y in voxel_negative_position[1]..=voxel_positive_position[1] {
+                            for _z in voxel_negative_position[2]..=voxel_positive_position[2] {
+                                voxels
+                                    .push(LevelSetupRaw::get_level_voxel_from_reader(&mut reader));
+                            }
+                        }
+                    }
+
+                    // in the c code after the for loops there is:
+                    // file_isNextByteExpected(file_ptr, 0);
+                    // which, in essence, advances the file_ptr by 1 if the current value is 0
+                    reader.read_if_expected(0, |_| 0);
+
+                    voxels_list = Some(LevelVoxelList {
+                        negative_position: match should_read {
+                            1 => Some(voxel_negative_position),
+                            _ => None,
+                        },
+                        positive_position: voxel_positive_position,
+                        voxels,
+                    });
+                }
+                3 => {
+                    // ncCameraNodeList_fromFile
+                    loop {
+                        let cmd = reader.read_u8();
+                        if cmd == 0 {
+                            break;
+                        }
+
+                        if cmd != 1 {
+                            panic!("Unexpected cmd {cmd}");
+                        }
+
+                        let camera_node_index = reader.read_i16();
+                        let camera_node_type =
+                            reader.read_if_expected(2, |r| r.read_u8()).unwrap_or(0);
+
+                        let mut camera_bytes = vec![camera_node_type];
+
+                        match camera_node_type {
+                            0 => {
+                                // no-op
+                            }
+                            1 => {
+                                // cameraNodeType1_fromFile
+                                loop {
+                                    let cmd = reader.read_u8();
+                                    camera_bytes.push(cmd);
+                                    match cmd {
+                                        0 => break,
+                                        1 | 4 => {
+                                            camera_bytes.append(
+                                                &mut reader.read_f32().to_be_bytes().into(),
+                                            );
+                                            camera_bytes.append(
+                                                &mut reader.read_f32().to_be_bytes().into(),
+                                            );
+                                            camera_bytes.append(
+                                                &mut reader.read_f32().to_be_bytes().into(),
+                                            );
+                                        }
+                                        2 | 3 => {
+                                            camera_bytes.append(
+                                                &mut reader.read_f32().to_be_bytes().into(),
+                                            );
+                                            camera_bytes.append(
+                                                &mut reader.read_f32().to_be_bytes().into(),
+                                            );
+                                        }
+                                        5 => {
+                                            camera_bytes.append(
+                                                &mut reader.read_word().to_be_bytes().into(),
+                                            );
+                                        }
+                                        _ => panic!("Unknown section = {cmd}"),
+                                    }
+                                }
+                            }
+                            2 => {
+                                // cameraNodeType2_fromFile
+                                loop {
+                                    let cmd = reader.read_u8();
+                                    camera_bytes.push(cmd);
+                                    match cmd {
+                                        0 => break,
+                                        1 | 2 => {
+                                            camera_bytes.append(
+                                                &mut reader.read_f32().to_be_bytes().into(),
+                                            );
+                                            camera_bytes.append(
+                                                &mut reader.read_f32().to_be_bytes().into(),
+                                            );
+                                            camera_bytes.append(
+                                                &mut reader.read_f32().to_be_bytes().into(),
+                                            );
+                                        }
+                                        _ => panic!("Unknown section = {cmd}"),
+                                    }
+                                }
+                            }
+                            3 => {
+                                // cameraNodeType3_fromFile
+                                loop {
+                                    let cmd = reader.read_u8();
+                                    camera_bytes.push(cmd);
+                                    match cmd {
+                                        0 => break,
+                                        1 | 4 => {
+                                            camera_bytes.append(
+                                                &mut reader.read_f32().to_be_bytes().into(),
+                                            );
+                                            camera_bytes.append(
+                                                &mut reader.read_f32().to_be_bytes().into(),
+                                            );
+                                            camera_bytes.append(
+                                                &mut reader.read_f32().to_be_bytes().into(),
+                                            );
+                                        }
+                                        2 | 3 | 6 => {
+                                            camera_bytes.append(
+                                                &mut reader.read_f32().to_be_bytes().into(),
+                                            );
+                                            camera_bytes.append(
+                                                &mut reader.read_f32().to_be_bytes().into(),
+                                            );
+                                        }
+                                        5 => {
+                                            camera_bytes.append(
+                                                &mut reader.read_word().to_be_bytes().into(),
+                                            );
+                                        }
+                                        _ => panic!("Unknown section = {cmd}"),
+                                    }
+                                }
+                            }
+                            4 => {
+                                // cameraNodeType4_fromFile
+                                loop {
+                                    let cmd = reader.read_u8();
+                                    camera_bytes.push(cmd);
+                                    match cmd {
+                                        0 => break,
+                                        1 => {
+                                            camera_bytes.append(
+                                                &mut reader.read_i32().to_be_bytes().into(),
+                                            );
+                                        }
+                                        _ => panic!("Unknown section = {cmd}"),
+                                    }
+                                }
+                            }
+                            _ => {
+                                panic!("Unknown camera_node_type {camera_node_type}");
+                            }
+                        }
+
+                        camera_nodes.push(LevelCameraNode {
+                            index: camera_node_index,
+                            bytes: camera_bytes,
+                        });
+                    }
+                }
+                4 => {
+                    // lightingVectorList_fromFile
+                    loop {
+                        let cmd = reader.read_u8();
+                        if cmd == 0 {
+                            break;
+                        }
+
+                        if cmd != 1 {
+                            panic!("Unexpected cmd = {cmd}");
+                        }
+
+                        // file_getNFloats_ifExpected(file_ptr, 2, position, 3)
+                        let (position, unknown_flags, rgb) = reader
+                            .read_if_expected(2, |r| {
+                                let position = [r.read_f32(), r.read_f32(), r.read_f32()];
+
+                                // file_getNFloats_ifExpected(file_ptr, 3, unknown_flags, 2)
+                                let (unknown_flags, rgb) = r
+                                    .read_if_expected(3, |r| {
+                                        let unknown_flags = [r.read_f32(), r.read_f32()];
+
+                                        // file_getNWords_ifExpected(file_ptr, 4, rgb, 3)
+                                        let rgb = r
+                                            .read_if_expected(4, |r| {
+                                                // the C code reads words, however only the last byte of the 4 read bytes contain the RGB hex value (0-255)
+                                                let rgb = r.read_n(12, |r| r.read_u8());
+
+                                                [rgb[3], rgb[7], rgb[11]]
+                                            })
+                                            .expect("Unable to read RGB of lighting node");
+
+                                        (unknown_flags, rgb)
+                                    })
+                                    .expect("Unable to read unknown flags of lighting node");
+
+                                (position, unknown_flags, rgb)
+                            })
+                            .expect("Unable to read position of lighting node");
+
+                        lighting_nodes.push(LightingNode {
+                            position,
+                            unknown_flags,
+                            rgb,
+                        });
+                    }
+                }
+                _ => {
+                    todo!("Implement cmd {cmd}?");
+                }
+            }
+        }
+
+        LevelSetupRaw {
+            bytes: in_bytes.to_vec(),
+            voxel_list: voxels_list.expect("Voxels list to exist in level setup file"),
+            camera_nodes: CameraNodeList {
+                nodes: camera_nodes,
+            },
+            lighting_nodes: LightingNodeList {
+                nodes: lighting_nodes,
+            },
+        }
+    }
+
+    fn get_level_voxel_from_reader(reader: &mut LevelSetupReader) -> LevelVoxel {
+        let mut voxel_objects: Vec<VoxelObject> = vec![];
+        let mut voxel_props: Vec<VoxelProp> = vec![];
+
+        loop {
+            let cmd = reader.read_u8();
+
+            match cmd {
+                0 => {
+                    /*
+                    if (file_getNWords_ifExpected(file_ptr, 0, sp2C, 3)) {
+                        file_getNWords(file_ptr, sp2C, 3);
+                    */
+                    panic!("Unexpected cmd 0");
+                }
+                1 => {
+                    return LevelVoxel {
+                        objects: voxel_objects,
+                        props: voxel_props,
+                    };
+                }
+                2 => {
+                    /*
+                    !file_getNWords_ifExpected(file_ptr, 2, &sp2C, 3)
+                    */
+                    panic!("Unexpected cmd 2");
+                }
+                3 => {
+                    // ->code7AF80_initCubeFromFile
+                    let voxel_type = reader.read_u8();
+                    let count: usize = reader.read_u8().into();
+                    assert!(
+                        voxel_type == 0xA || voxel_type == 0x6,
+                        "Unknown voxel type {voxel_type}"
+                    );
+
+                    if count == 0 {
+                        voxel_objects.push(None);
+                        continue;
+                    }
+
+                    let next_expected = voxel_type + 1;
+                    let voxel_byte_size = 20;
+                    let voxel_bytes = reader
+                        .read_if_expected(next_expected, |r| r.read_u8_n(count * voxel_byte_size));
+
+                    if let Some(voxel_bytes) = voxel_bytes {
+                        voxel_bytes
+                            .chunks(voxel_byte_size)
+                            .for_each(|voxel| voxel_objects.push(Some(voxel.to_vec())));
+                    } else {
+                        panic!(
+                            "Did not read {voxel_byte_size}, count = {count}, found {}",
+                            reader.read_u8()
+                        );
+                    }
+                }
+                8 => {
+                    let count: usize = reader.read_u8().into();
+
+                    if count == 0 {
+                        continue;
+                    }
+
+                    let voxel_byte_size = 12; // sizeof(Prop)
+                    let voxel_bytes =
+                        reader.read_if_expected(9, |r| r.read_u8_n(count * voxel_byte_size));
+
+                    if let Some(voxel_bytes) = voxel_bytes {
+                        voxel_bytes.chunks(voxel_byte_size).for_each(|voxel| {
+                            voxel_props.push(voxel.to_vec());
+                        });
+                    } else {
+                        panic!("Did not read props?")
+                    }
+                }
+                _ => {
+                    panic!("Unexpected cmd {cmd}");
+                }
+            }
+        }
+    }
+}
+
+impl Asset for LevelSetupRaw {
+    fn to_bytes(&self) -> Vec<u8> {
+        self.bytes.to_vec()
+    }
+
+    fn get_type(&self) -> AssetType {
+        AssetType::LevelSetup
+    }
+
+    fn write(&self, path: &Path) {
+        let mut bin_file = File::create(path).unwrap();
+        let mut out_bytes: Vec<u8> = vec![];
+
+        self.voxel_list.write(&mut out_bytes);
+        self.camera_nodes.write(&mut out_bytes);
+        self.lighting_nodes.write(&mut out_bytes);
+
+        // EOF
+        out_bytes.push(0);
+
+        let mut hex_file = File::create(path.with_extension("hex")).unwrap();
+
+        hex_file
+            .write_all(u8s_to_readable_hex(out_bytes.as_slice(), 16).as_bytes())
+            .unwrap();
+
+        bin_file.write_all(&out_bytes).unwrap();
+    }
+}
+
+impl LevelVoxelList {
+    fn write(&self, out_bytes: &mut Vec<u8>) {
+        out_bytes.push(1);
+
+        match self.negative_position {
+            Some(negative_position) => {
+                out_bytes.push(1);
+                out_bytes.append(&mut negative_position.map(|x| x.to_be_bytes().to_vec()).concat())
+            }
+            _ => {
+                out_bytes.push(0);
+            }
+        }
+
+        out_bytes.append(
+            &mut self
+                .positive_position
+                .map(|x| x.to_be_bytes().to_vec())
+                .concat(),
+        );
+
+        for voxel in &self.voxels {
+            if !voxel.objects.is_empty() || !voxel.props.is_empty() {
+                out_bytes.push(3);
+
+                out_bytes.push(0xA);
+                let objects = voxel
+                    .objects
+                    .iter()
+                    .filter_map(|x| x.clone())
+                    .collect::<Vec<Vec<u8>>>();
+                assert!((objects.len() as u8) < u8::MAX);
+
+                out_bytes.push(objects.len() as u8);
+                if !objects.is_empty() {
+                    out_bytes.push(0xB);
+                    for object in objects {
+                        out_bytes.append(&mut object.clone());
+                    }
+                }
+
+                out_bytes.push(0x8);
+                let props = voxel.props.clone();
+                assert!((props.len() as u8) < u8::MAX);
+
+                out_bytes.push(props.len() as u8);
+                if !props.is_empty() {
+                    out_bytes.push(9);
+                    for prop in props {
+                        out_bytes.append(&mut prop.clone());
+                    }
+                }
+            }
+
+            out_bytes.push(1);
+        }
+
+        out_bytes.push(0);
+    }
+}
+
+impl CameraNodeList {
+    fn write(&self, out_bytes: &mut Vec<u8>) {
+        out_bytes.push(3);
+        for node in &self.nodes {
+            out_bytes.push(1);
+            out_bytes.append(&mut node.index.to_be_bytes().into());
+            out_bytes.push(2);
+            out_bytes.append(&mut node.bytes.clone());
+        }
+        out_bytes.push(0);
+    }
+}
+
+impl LightingNodeList {
+    fn write(&self, out_bytes: &mut Vec<u8>) {
+        out_bytes.push(4);
+        for node in &self.nodes {
+            out_bytes.push(1);
+            out_bytes.push(2);
+            for xyz in node.position {
+                out_bytes.append(&mut xyz.to_be_bytes().into());
+            }
+            out_bytes.push(3);
+
+            for flag in node.unknown_flags {
+                out_bytes.append(&mut flag.to_be_bytes().into());
+            }
+            out_bytes.push(4);
+
+            for rgb in node.rgb {
+                out_bytes.append(&mut vec![0, 0, 0, rgb]);
+            }
+        }
+        out_bytes.push(0);
+    }
 }
 
 impl LevelSetup {
@@ -1094,16 +1611,6 @@ impl LevelSetup {
         let _map_name = maps
             .get(&map_idx)
             .unwrap_or_else(|| panic!("Expected {map_idx} to exist in maps"));
-
-        // Skip this file as it currently fails to parse
-        if map_idx == 113 || _map_name.as_str().ne(DEBUG_MAP) {
-            return LevelSetup {
-                bytes: in_bytes.to_vec(),
-                cubes: vec![],
-                camera_nodes: vec![],
-                lighting_nodes: vec![],
-            };
-        }
 
         let mut level_cubes = vec![];
         let mut camera_nodes = vec![];
@@ -1168,7 +1675,7 @@ impl LevelSetup {
                         let mut node_data = vec![];
 
                         match camera_node_type {
-                            0 => break,
+                            0 => continue,
                             1 => {
                                 // cameraNodeType1_fromFile
                                 let mut node_data_type_1 = NodeData1 {
@@ -1371,10 +1878,9 @@ impl LevelSetup {
 
                         if let Some((position, unknown_flags, rgb)) = read_data {
                             lighting_nodes.push(LightingNode {
-                                position: Some(position),
-                                unknown_1: Some(unknown_flags[0]),
-                                unknown_2: Some(unknown_flags[1]),
-                                rgb: Some(rgb),
+                                position,
+                                unknown_flags,
+                                rgb,
                             });
                         }
                     }
@@ -1454,10 +1960,7 @@ impl LevelSetup {
                     }
                 }
                 _ => {
-                    todo!(
-                        "Unknown cmd {cmd} {}",
-                        LevelSetupReader::u8s_to_string(&reader.read_u8_n(50))
-                    );
+                    todo!("Unexpected cmd {cmd}",);
                 }
             }
         }
