@@ -30,12 +30,19 @@ struct VoxelList {
     voxels: Vec<Voxel>,
 }
 
-type VoxelObject = Option<Vec<u8>>; // 20 bytes
+#[derive(Clone, Debug)]
+struct VoxelObject {
+    x: i16,
+    y: i16,
+    z: i16,
+    bytes: Vec<u8>, // 14 bytes
+}
+
 type VoxelProp = Vec<u8>; // 16 bytes
 
 #[derive(Clone, Debug)]
 struct Voxel {
-    objects: Vec<VoxelObject>,
+    objects: Vec<Option<VoxelObject>>,
     props: Vec<VoxelProp>,
 }
 
@@ -236,14 +243,17 @@ impl VoxelList {
                     .objects
                     .iter()
                     .filter_map(|x| x.clone())
-                    .collect::<Vec<Vec<u8>>>();
+                    .collect::<Vec<VoxelObject>>();
                 assert!((objects.len() as u8) < u8::MAX);
 
                 out_bytes.push(objects.len() as u8);
                 if !objects.is_empty() {
                     out_bytes.push(0xB);
-                    for object in objects {
-                        out_bytes.append(&mut object.clone());
+                    for mut object in objects {
+                        out_bytes.append(&mut object.x.to_be_bytes().to_vec().clone());
+                        out_bytes.append(&mut object.y.to_be_bytes().to_vec().clone());
+                        out_bytes.append(&mut object.z.to_be_bytes().to_vec().clone());
+                        out_bytes.append(&mut object.bytes);
                     }
                 }
 
@@ -287,7 +297,9 @@ impl VoxelList {
 
         // in the c code after the for loops there is:
         // file_isNextByteExpected(file_ptr, 0);
-        reader.read_if_expected(0, |_| 0).expect("Padding 0 to always be present");
+        reader
+            .read_if_expected(0, |_| 0)
+            .expect("Padding 0 to always be present");
 
         VoxelList {
             start_position,
@@ -297,7 +309,7 @@ impl VoxelList {
     }
 
     fn get_level_voxel_from_reader(reader: &mut LevelSetupReader) -> Voxel {
-        let mut voxel_objects: Vec<VoxelObject> = vec![];
+        let mut voxel_objects: Vec<Option<VoxelObject>> = vec![];
         let mut voxel_props: Vec<VoxelProp> = vec![];
 
         loop {
@@ -327,10 +339,7 @@ impl VoxelList {
                     // ->code7AF80_initCubeFromFile
                     let voxel_type = reader.read_u8();
                     let count: usize = reader.read_u8().into();
-                    assert!(
-                        voxel_type == 0xA || voxel_type == 0x6,
-                        "Unknown voxel type {voxel_type}"
-                    );
+                    assert!(voxel_type == 0xA, "Unknown voxel type {voxel_type}");
 
                     if count == 0 {
                         voxel_objects.push(None);
@@ -343,7 +352,19 @@ impl VoxelList {
                         .read_if_expected(next_expected, |r| r.read_u8_n(count * voxel_byte_size))
                         .unwrap_or_else(|| panic!("Should have read {count} * {voxel_byte_size} bytes because {next_expected} was expected. Instead got {}", reader.read_u8()))
                         .chunks(voxel_byte_size)
-                        .for_each(|voxel| voxel_objects.push(Some(voxel.to_vec())));
+                        .for_each(|voxel| {
+                            let x = i16::from_be_bytes([voxel[0], voxel[1]]);
+                            let y = i16::from_be_bytes([voxel[2], voxel[3]]);
+                            let z = i16::from_be_bytes([voxel[4], voxel[5]]);
+                            let bytes = voxel[6..].to_vec();
+                            
+                            voxel_objects.push(Some(VoxelObject {
+                                x,
+                                y,
+                                z,
+                                bytes
+                            }))
+                        });
                 }
                 8 => {
                     let count: usize = reader.read_u8().into();
@@ -392,11 +413,14 @@ impl VoxelList {
             } else {
                 out_string.push_str("      objects: [\n");
                 for object in &voxel.objects {
-                    let bytes = object.clone().unwrap_or(vec![]);
-                    out_string.push_str(
-                        format!("        {},\n", u8s_to_byte_array_string(bytes.as_slice()))
-                            .as_str(),
-                    );
+                    if let Some(object) = object {
+                        out_string.push_str(
+                            format!("        {{ x: {:?}, y: {:?}, z: {:?}, bytes: {} }},\n", object.x, object.y, object.z, u8s_to_byte_array_string(object.bytes.as_slice()))
+                                .as_str(),
+                        );
+                    } else {
+                        out_string.push_str("        { x: -1, y: -1, z: -1, bytes: [] },\n");
+                    }
                 }
                 out_string.push_str("      ],\n");
             }
@@ -438,7 +462,7 @@ impl VoxelList {
             let mut objects = vec![];
             let yaml_objects = &yaml_voxel["objects"].as_vec().unwrap();
             for yaml_object in yaml_objects.iter() {
-                let object_bytes = yaml_object
+                let object_bytes = yaml_object["bytes"]
                     .as_vec()
                     .unwrap()
                     .iter()
@@ -447,7 +471,12 @@ impl VoxelList {
                 if object_bytes.is_empty() {
                     objects.push(None);
                 } else {
-                    objects.push(Some(object_bytes));
+                    objects.push(Some(VoxelObject {
+                        x: yaml_object["x"].as_i64().unwrap() as i16,
+                        y: yaml_object["y"].as_i64().unwrap() as i16,
+                        z: yaml_object["z"].as_i64().unwrap() as i16,
+                        bytes: object_bytes
+                    }));
                 }
             }
 
@@ -506,7 +535,9 @@ impl CameraNodeList {
             }
 
             let camera_node_index = reader.read_i16();
-            let camera_node_type = reader.read_if_expected(2, |r| r.read_u8()).expect("Camera node type");
+            let camera_node_type = reader
+                .read_if_expected(2, |r| r.read_u8())
+                .expect("Camera node type");
 
             let mut sections = vec![];
 
